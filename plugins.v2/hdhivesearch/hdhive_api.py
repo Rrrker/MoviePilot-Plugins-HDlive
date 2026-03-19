@@ -17,7 +17,7 @@ class HDHiveException(Exception):
 
 
 class HDHiveAPI:
-    BASE_URL = "https://hdhive.com/api/open"
+    BASE_URL = "https://hdhive.com/api/open/"  # 末尾加斜杠，确保urljoin正确拼接
     
     ERROR_CODES = {
         "MISSING_API_KEY": "缺少API Key",
@@ -30,10 +30,12 @@ class HDHiveAPI:
         "RATE_LIMIT_EXCEEDED": "请求过于频繁",
     }
     
-    def __init__(self, api_key: str, base_url: str = None, timeout: int = 30):
+    def __init__(self, api_key: str, base_url: str = None, timeout: int = 30, use_proxy: bool = True, proxy_url: str = None):
         self.api_key = api_key
         self.base_url = base_url or self.BASE_URL
         self.timeout = timeout
+        self.use_proxy = use_proxy
+        self.proxy_url = proxy_url
 
         # 配置请求会话
         self.session = requests.Session()
@@ -42,6 +44,28 @@ class HDHiveAPI:
             "Content-Type": "application/json",
             "Accept": "application/json"
         })
+
+        # 如果提供了代理地址，配置代理
+        if self.proxy_url:
+            self.session.proxies = {
+                "http": self.proxy_url,
+                "https": self.proxy_url
+            }
+            logger.info(f"已配置代理: {self.proxy_url}")
+        elif self.use_proxy:
+            # 未提供代理地址但启用代理，尝试使用环境变量
+            import os
+            http_proxy = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+            https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+            if http_proxy or https_proxy:
+                self.session.proxies = {}
+                if http_proxy:
+                    self.session.proxies["http"] = http_proxy
+                if https_proxy:
+                    self.session.proxies["https"] = https_proxy
+                logger.info(f"使用环境变量代理: http={http_proxy}, https={https_proxy}")
+            else:
+                logger.warning("未找到环境变量代理 (HTTP_PROXY/HTTPS_PROXY)")
 
         # 配置重试策略
         try:
@@ -60,33 +84,20 @@ class HDHiveAPI:
     
     def _request_with_fallback(self, method: str, endpoint: str, **kwargs) -> Dict:
         """
-        发起HTTP请求，支持代理重试机制
-        首先尝试使用系统代理，失败后直连
+        发起HTTP请求，根据 use_proxy 配置决定是否使用代理
+        启用代理时只使用代理，不自动回退直连
         """
         url = urljoin(self.base_url, endpoint)
+        logger.info(f"完整请求URL: {url}")  # 添加调试日志
 
-        # 1. 首先尝试使用系统代理
-        try:
-            logger.debug("尝试使用系统代理访问HDHive API")
-            response = self.session.request(
-                method=method,
-                url=url,
-                timeout=self.timeout,
-                **kwargs
-            )
-            logger.info(f"使用系统代理请求成功，状态码: {response.status_code}")
-            return self._process_response(response)
-
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectTimeout,
-               requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
-            logger.warning(f"系统代理访问失败: {str(e)}，尝试直连")
-
-            # 2. 创建禁用代理的临时 session
+        # 如果不启用代理，直接直连
+        if not self.use_proxy:
+            logger.info("代理已禁用，直接连接HDHive API")
+            # 创建临时会话，明确禁用代理
             direct_session = requests.Session()
             direct_session.headers.update(self.session.headers)
             direct_session.proxies = {'http': None, 'https': None}
 
-            # 3. 直连重试
             try:
                 response = direct_session.request(
                     method=method,
@@ -94,12 +105,25 @@ class HDHiveAPI:
                     timeout=self.timeout,
                     **kwargs
                 )
-                logger.info(f"直连请求成功，状态码: {response.status_code}")
+                logger.info(f"直连请求响应，状态码: {response.status_code}")
                 return self._process_response(response)
+            except Exception as e:
+                logger.error(f"直连请求失败: {str(e)}")
+                raise HDHiveException("NETWORK_ERROR", str(e))
 
-            except Exception as direct_error:
-                logger.error(f"直连也失败: {str(direct_error)}")
-                raise direct_error
+        # 启用代理时，只使用代理
+        if self.session.proxies:
+            logger.info(f"使用代理访问HDHive API: {self.session.proxies}")
+        else:
+            logger.warning("代理已启用但未配置代理地址，尝试直连")
+        response = self.session.request(
+            method=method,
+            url=url,
+            timeout=self.timeout,
+            **kwargs
+        )
+        logger.info(f"代理请求响应，状态码: {response.status_code}")
+        return self._process_response(response)
 
     def _process_response(self, response: requests.Response) -> Dict:
         """处理HTTP响应，检查状态码和JSON格式"""
@@ -110,6 +134,27 @@ class HDHiveAPI:
                 "RATE_LIMIT_EXCEEDED",
                 "请求过于频繁",
                 f"请等待 {retry_after} 秒后重试"
+            )
+
+        # 检查403禁止访问
+        if response.status_code == 403:
+            # 尝试获取响应内容用于调试
+            response_text = response.text[:200] if response.text else "空响应"
+            logger.error(f"API返回403 Forbidden，响应内容: {response_text}")
+            raise HDHiveException(
+                "FORBIDDEN",
+                "访问被拒绝",
+                f"API返回403错误，可能是代理问题或API Key无效。建议关闭代理开关尝试直连。"
+            )
+
+        # 检查其他错误状态码
+        if response.status_code >= 400:
+            response_text = response.text[:200] if response.text else "空响应"
+            logger.error(f"API返回错误状态码 {response.status_code}，响应内容: {response_text}")
+            raise HDHiveException(
+                "HTTP_ERROR",
+                f"HTTP错误 {response.status_code}",
+                f"服务器返回错误: {response_text}"
             )
 
         # 解析JSON响应
@@ -133,60 +178,60 @@ class HDHiveAPI:
         return data.get("data", {})
     
     def ping(self) -> Dict:
-        return self._request_with_fallback("GET", "/ping")
+        return self._request_with_fallback("GET", "ping")
 
     def get_user_info(self) -> Dict:
-        return self._request_with_fallback("GET", "/me")
+        return self._request_with_fallback("GET", "me")
 
     def checkin(self) -> Dict:
-        return self._request_with_fallback("POST", "/checkin")
+        return self._request_with_fallback("POST", "checkin")
 
     def get_quota(self) -> Dict:
-        return self._request_with_fallback("GET", "/quota")
+        return self._request_with_fallback("GET", "quota")
 
     def get_usage(self) -> Dict:
-        return self._request_with_fallback("GET", "/usage")
+        return self._request_with_fallback("GET", "usage")
 
     def get_today_usage(self) -> Dict:
-        return self._request_with_fallback("GET", "/usage/today")
+        return self._request_with_fallback("GET", "usage/today")
 
     def get_weekly_free_quota(self) -> Dict:
-        return self._request_with_fallback("GET", "/vip/weekly-free-quota")
-    
+        return self._request_with_fallback("GET", "vip/weekly-free-quota")
+
     def get_resources(self, media_type: str, tmdb_id: str) -> List[Dict]:
         """通过 TMDB ID 获取资源列表"""
-        endpoint = f"/resources/{media_type}/{tmdb_id}"
+        endpoint = f"resources/{media_type}/{tmdb_id}"
         result = self._request_with_fallback("GET", endpoint)
 
         if isinstance(result, dict) and "data" in result:
             return result.get("data", [])
         return result if isinstance(result, list) else []
-    
+
     def unlock_resource(self, slug: str) -> Dict:
         """解锁资源"""
-        return self._request_with_fallback("POST", "/resources/unlock", json={"slug": slug})
-    
+        return self._request_with_fallback("POST", "resources/unlock", json={"slug": slug})
+
     def check_resource(self, url: str) -> Dict:
-        return self._request_with_fallback("POST", "/check/resource", json={"url": url})
+        return self._request_with_fallback("POST", "check/resource", json={"url": url})
 
     def get_shares(self, page: int = 1, page_size: int = 20) -> Dict:
-        return self._request_with_fallback("GET", "/shares", params={
+        return self._request_with_fallback("GET", "shares", params={
             "page": page,
             "page_size": page_size
         })
 
     def get_share_detail(self, slug: str) -> Dict:
         """获取资源详情"""
-        return self._request_with_fallback("GET", f"/shares/{slug}")
+        return self._request_with_fallback("GET", f"shares/{slug}")
 
     def create_share(self, share_data: Dict) -> Dict:
-        return self._request_with_fallback("POST", "/shares", json=share_data)
+        return self._request_with_fallback("POST", "shares", json=share_data)
 
     def update_share(self, slug: str, share_data: Dict) -> Dict:
-        return self._request_with_fallback("PATCH", f"/shares/{slug}", json=share_data)
+        return self._request_with_fallback("PATCH", f"shares/{slug}", json=share_data)
 
     def delete_share(self, slug: str) -> Dict:
-        return self._request_with_fallback("DELETE", f"/shares/{slug}")
+        return self._request_with_fallback("DELETE", f"shares/{slug}")
     
     def close(self):
         self.session.close()

@@ -16,12 +16,12 @@ from .hdhive_api import HDHiveAPI, HDHiveException
 
 
 class HDHiveSearch(_PluginBase):
-    plugin_name = "HDHive资源搜索"
+    plugin_name = "影巢资源搜索"
     plugin_desc = "支持积分解锁、每日签到、VIP免费额度、CMS自动转存、统计系统、智能重试、微信格式化、优先级配置、Premium控制。"
-    plugin_icon = "Alist_B.png"
-    plugin_version = "2.0.0"
-    plugin_author = "HDHive"
-    author_url = "https://hdhive.com"
+    plugin_icon = "ccv2.png"
+    plugin_version = "2.1.1"
+    plugin_author = "Rrrker"
+    author_url = "https://github.com/Rrrker/MoviePilot-Plugins"
     plugin_config_prefix = "hdhivesearch_"
     plugin_order = 10
     auth_level = 1
@@ -29,10 +29,18 @@ class HDHiveSearch(_PluginBase):
     _enabled = False
     _api_key = ""
     _api_base_url = "https://hdhive.com/api/open"
+    _use_proxy = True
+    _proxy_url = ""
     _notify = True
     _search_history: Dict[str, Dict] = {}
     _user_cache: Dict[str, Any] = {}
     _api: Optional[HDHiveAPI] = None
+
+    # 请求去重缓存
+    _request_cache: Dict[str, float] = {}
+
+    # 选择处理防重缓存（防止同一用户短时间内重复选择）
+    _selection_cache: Dict[str, float] = {}
 
     # Premium 用户配置
     _is_premium_user = False
@@ -80,6 +88,8 @@ class HDHiveSearch(_PluginBase):
             self._enabled = config.get("enabled", False)
             self._api_key = config.get("api_key", "")
             self._api_base_url = config.get("api_base_url", "https://hdhive.com/api/open")
+            self._use_proxy = config.get("use_proxy", True)
+            self._proxy_url = config.get("proxy_url", "")
             self._notify = config.get("notify", True)
             self._search_history = config.get("search_history", {})
             self._user_cache = config.get("user_cache", {})
@@ -109,7 +119,9 @@ class HDHiveSearch(_PluginBase):
         if self._enabled and self._api_key:
             self._api = HDHiveAPI(
                 api_key=self._api_key,
-                base_url=self._api_base_url
+                base_url=self._api_base_url,
+                use_proxy=self._use_proxy,
+                proxy_url=self._proxy_url
             )
 
             # 验证 Premium 用户状态
@@ -134,17 +146,15 @@ class HDHiveSearch(_PluginBase):
                 self._cms_client = None
 
     def _verify_premium_user(self):
-        """验证 Premium 用户状态"""
+        """验证 Premium 用户状态（仅验证 API Key 有效性，不调用 Premium 专属接口）"""
         try:
-            user_info = self._api.get_user_info()
-            actual_vip_status = user_info.get("is_vip", False)
-
-            if not actual_vip_status:
-                logger.warning("配置为Premium用户但API Key未绑定VIP账号，已禁用Premium功能")
-                self._is_premium_user = False
-                # 这里可以发送系统通知
+            # 使用 ping 接口验证 API Key 有效性（所有用户可用）
+            ping_result = self._api.ping()
+            logger.info(f"API Key 验证成功: {ping_result.get('name', 'Unknown')}")
+        except HDHiveException as e:
+            logger.error(f"API Key 验证失败: {e}")
         except Exception as e:
-            logger.error(f"验证Premium用户状态失败: {e}")
+            logger.error(f"验证 API Key 时发生异常: {e}")
 
     def _check_premium_access(self, feature_name: str) -> bool:
         """检查是否有权限访问Premium功能"""
@@ -226,318 +236,335 @@ class HDHiveSearch(_PluginBase):
             {
                 "component": "VForm",
                 "content": [
+                    # 基础配置
                     {
-                        "component": "VCard",
-                        "props": {
-                            "title": "基础配置",
-                            "variant": "outlined"
-                        },
+                        "component": "VRow",
                         "content": [
                             {
-                                "component": "VDivider"
-                            },
-                            {
-                                "component": "VRow",
+                                "component": "VCol",
+                                "props": {"cols": 12},
                                 "content": [
                                     {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {
-                                                    "model": "enabled",
-                                                    "label": "启用插件",
-                                                    "hint": "开启后将监听用户消息进行资源搜索"
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {
-                                                    "model": "is_premium_user",
-                                                    "label": "Premium用户",
-                                                    "hint": "开启后可使用VIP专属功能（签到、免费额度等）"
-                                                }
-                                            }
-                                        ]
+                                        "component": "VAlert",
+                                        "props": {
+                                            "type": "info",
+                                            "variant": "tonal",
+                                            "text": "HDHive资源搜索插件 - 支持115/123/夸克/百度网盘资源搜索"
+                                        }
                                     }
                                 ]
                             }
                         ]
                     },
                     {
-                        "component": "VCard",
-                        "props": {
-                            "title": "API配置",
-                            "variant": "outlined"
-                        },
+                        "component": "VRow",
                         "content": [
                             {
-                                "component": "VDivider"
-                            },
-                            {
-                                "component": "VRow",
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
                                 "content": [
                                     {
-                                        "component": "VCol",
-                                        "props": {"cols": 12},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "api_key",
-                                                    "label": "API Key",
-                                                    "type": "password",
-                                                    "placeholder": "输入HDHive API Key",
-                                                    "hint": "从HDHive官网获取API Key",
-                                                    "rules": [
-                                                        {"required": True, "message": "请输入API Key"}
-                                                    ]
-                                                }
-                                            }
-                                        ]
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "enabled",
+                                            "label": "启用插件",
+                                            "hint": "开启后将监听用户消息进行资源搜索",
+                                            "persistent-hint": True
+                                        }
                                     }
                                 ]
                             },
                             {
-                                "component": "VRow",
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
                                 "content": [
                                     {
-                                        "component": "VCol",
-                                        "props": {"cols": 12},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "api_base_url",
-                                                    "label": "API地址",
-                                                    "placeholder": "https://hdhive.com/api/open",
-                                                    "hint": "HDHive API服务地址"
-                                                }
-                                            }
-                                        ]
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "is_premium_user",
+                                            "label": "Premium用户",
+                                            "hint": "开启后可使用VIP专属功能（签到、免费额度等）",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    # API配置
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "api_key",
+                                            "label": "API Key",
+                                            "type": "password",
+                                            "placeholder": "输入HDHive API Key",
+                                            "hint": "从HDHive官网获取API Key",
+                                            "persistent-hint": True
+                                        }
                                     }
                                 ]
                             }
                         ]
                     },
                     {
-                        "component": "VCard",
-                        "props": {
-                            "title": "网盘优先级配置",
-                            "subtitle": "设置资源搜索时网盘类型的优先级顺序",
-                            "variant": "outlined"
-                        },
+                        "component": "VRow",
                         "content": [
                             {
-                                "component": "VDivider"
-                            },
-                            {
-                                "component": "VRow",
+                                "component": "VCol",
+                                "props": {"cols": 12},
                                 "content": [
                                     {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VSelect",
-                                                "props": {
-                                                    "model": "priority_1",
-                                                    "label": "第一优先级",
-                                                    "items": [
-                                                        {"title": "115网盘", "value": "115"},
-                                                        {"title": "123网盘", "value": "123"},
-                                                        {"title": "夸克网盘", "value": "quark"},
-                                                        {"title": "百度网盘", "value": "baidu"}
-                                                    ],
-                                                    "hint": "最高优先级网盘类型"
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VSelect",
-                                                "props": {
-                                                    "model": "priority_2",
-                                                    "label": "第二优先级",
-                                                    "items": [
-                                                        {"title": "115网盘", "value": "115"},
-                                                        {"title": "123网盘", "value": "123"},
-                                                        {"title": "夸克网盘", "value": "quark"},
-                                                        {"title": "百度网盘", "value": "baidu"}
-                                                    ],
-                                                    "hint": "次高优先级网盘类型"
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VSelect",
-                                                "props": {
-                                                    "model": "priority_3",
-                                                    "label": "第三优先级",
-                                                    "items": [
-                                                        {"title": "115网盘", "value": "115"},
-                                                        {"title": "123网盘", "value": "123"},
-                                                        {"title": "夸克网盘", "value": "quark"},
-                                                        {"title": "百度网盘", "value": "baidu"}
-                                                    ],
-                                                    "hint": "第三优先级网盘类型"
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VSelect",
-                                                "props": {
-                                                    "model": "priority_4",
-                                                    "label": "第四优先级",
-                                                    "items": [
-                                                        {"title": "115网盘", "value": "115"},
-                                                        {"title": "123网盘", "value": "123"},
-                                                        {"title": "夸克网盘", "value": "quark"},
-                                                        {"title": "百度网盘", "value": "baidu"}
-                                                    ],
-                                                    "hint": "最低优先级网盘类型"
-                                                }
-                                            }
-                                        ]
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "api_base_url",
+                                            "label": "API地址",
+                                            "placeholder": "https://hdhive.com/api/open",
+                                            "hint": "HDHive API服务地址",
+                                            "persistent-hint": True
+                                        }
                                     }
                                 ]
                             }
                         ]
                     },
                     {
-                        "component": "VCard",
-                        "props": {
-                            "title": "CMS配置",
-                            "subtitle": "配置CloudSyncMedia实现自动转存",
-                            "variant": "outlined"
-                        },
+                        "component": "VRow",
                         "content": [
                             {
-                                "component": "VDivider"
-                            },
-                            {
-                                "component": "VRow",
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
                                 "content": [
                                     {
-                                        "component": "VCol",
-                                        "props": {"cols": 12},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {
-                                                    "model": "cms_enabled",
-                                                    "label": "启用CMS自动转存",
-                                                    "hint": "开启后115网盘资源将自动转存到CloudSyncMedia"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                "component": "VRow",
-                                "content": [
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "cms_url",
-                                                    "label": "CMS地址",
-                                                    "placeholder": "http://localhost:5000",
-                                                    "hint": "CloudSyncMedia服务地址"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                "component": "VRow",
-                                "content": [
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "cms_username",
-                                                    "label": "CMS用户名",
-                                                    "placeholder": "输入用户名",
-                                                    "hint": "CloudSyncMedia登录用户名"
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "cms_password",
-                                                    "label": "CMS密码",
-                                                    "type": "password",
-                                                    "placeholder": "输入密码",
-                                                    "hint": "CloudSyncMedia登录密码"
-                                                }
-                                            }
-                                        ]
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "use_proxy",
+                                            "label": "使用代理访问",
+                                            "hint": "开启后使用代理访问API，关闭则直连",
+                                            "persistent-hint": True
+                                        }
                                     }
                                 ]
                             }
                         ]
                     },
                     {
-                        "component": "VCard",
-                        "props": {
-                            "title": "使用说明",
-                            "variant": "outlined"
-                        },
+                        "component": "VRow",
                         "content": [
                             {
-                                "component": "VDivider"
-                            },
-                            {
-                                "component": "VRow",
+                                "component": "VCol",
+                                "props": {"cols": 12},
                                 "content": [
                                     {
-                                        "component": "VCol",
-                                        "props": {"cols": 12},
-                                        "content": [
-                                            {
-                                                "component": "VAlert",
-                                                "props": {
-                                                    "type": "info",
-                                                    "text": "使用方法：发送「影片名？」进行搜索，如「武林外传？」。搜索结果以数字选择，如「1？」查看详情，「1.115？」指定网盘类型。Premium用户可使用 /hdhive_me 查看用户信息，/hdhive_checkin 每日签到，/hdhive_quota 查看免费额度。"
-                                                }
-                                            }
-                                        ]
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "proxy_url",
+                                            "label": "代理地址",
+                                            "placeholder": "http://127.0.0.1:7890 或 socks5://127.0.0.1:1080",
+                                            "hint": "留空则使用系统环境变量代理。支持 HTTP/HTTPS/SOCKS5 代理，格式：协议://地址:端口 或 协议://用户名:密码@地址:端口",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    # 网盘优先级配置
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSelect",
+                                        "props": {
+                                            "model": "priority_1",
+                                            "label": "第一优先级",
+                                            "items": [
+                                                {"title": "115网盘", "value": "115"},
+                                                {"title": "123网盘", "value": "123"},
+                                                {"title": "夸克网盘", "value": "quark"},
+                                                {"title": "百度网盘", "value": "baidu"}
+                                            ],
+                                            "hint": "最高优先级网盘类型",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSelect",
+                                        "props": {
+                                            "model": "priority_2",
+                                            "label": "第二优先级",
+                                            "items": [
+                                                {"title": "115网盘", "value": "115"},
+                                                {"title": "123网盘", "value": "123"},
+                                                {"title": "夸克网盘", "value": "quark"},
+                                                {"title": "百度网盘", "value": "baidu"}
+                                            ],
+                                            "hint": "次高优先级网盘类型",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSelect",
+                                        "props": {
+                                            "model": "priority_3",
+                                            "label": "第三优先级",
+                                            "items": [
+                                                {"title": "115网盘", "value": "115"},
+                                                {"title": "123网盘", "value": "123"},
+                                                {"title": "夸克网盘", "value": "quark"},
+                                                {"title": "百度网盘", "value": "baidu"}
+                                            ],
+                                            "hint": "第三优先级网盘类型",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSelect",
+                                        "props": {
+                                            "model": "priority_4",
+                                            "label": "第四优先级",
+                                            "items": [
+                                                {"title": "115网盘", "value": "115"},
+                                                {"title": "123网盘", "value": "123"},
+                                                {"title": "夸克网盘", "value": "quark"},
+                                                {"title": "百度网盘", "value": "baidu"}
+                                            ],
+                                            "hint": "最低优先级网盘类型",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    # CMS配置
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "cms_enabled",
+                                            "label": "启用CMS自动转存",
+                                            "hint": "开启后115网盘资源将自动转存到CloudSyncMedia",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "cms_url",
+                                            "label": "CMS地址",
+                                            "placeholder": "http://localhost:5000",
+                                            "hint": "CloudSyncMedia服务地址",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "cms_username",
+                                            "label": "CMS用户名",
+                                            "placeholder": "输入用户名",
+                                            "hint": "CloudSyncMedia登录用户名",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "cms_password",
+                                            "label": "CMS密码",
+                                            "type": "password",
+                                            "placeholder": "输入密码",
+                                            "hint": "CloudSyncMedia登录密码",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    # 使用说明
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [
+                                    {
+                                        "component": "VAlert",
+                                        "props": {
+                                            "type": "info",
+                                            "text": "使用方法：发送「影片名？」进行搜索，如「武林外传？」。搜索结果以数字选择，如「1？」查看详情，「1.115？」指定网盘类型。Premium用户可使用 /hdhive_me 查看用户信息，/hdhive_checkin 每日签到，/hdhive_quota 查看免费额度。"
+                                        }
                                     }
                                 ]
                             }
@@ -550,6 +577,8 @@ class HDHiveSearch(_PluginBase):
             "is_premium_user": self._is_premium_user,
             "api_key": self._api_key,
             "api_base_url": self._api_base_url,
+            "use_proxy": self._use_proxy,
+            "proxy_url": self._proxy_url,
             "priority_1": self._priority_1,
             "priority_2": self._priority_2,
             "priority_3": self._priority_3,
@@ -561,29 +590,10 @@ class HDHiveSearch(_PluginBase):
         }
 
     def get_page(self) -> List[dict]:
-        return [
-            {
-                "component": "VCard",
-                "props": {
-                    "title": "搜索历史",
-                    "subtitle": "最近的搜索记录"
-                },
-                "content": [
-                    {
-                        "component": "VDataTable",
-                        "props": {
-                            "headers": [
-                                {"title": "关键词", "key": "keyword"},
-                                {"title": "搜索时间", "key": "time"},
-                                {"title": "结果数", "key": "count"}
-                            ],
-                            "items": self._get_search_history_list(),
-                            "items-per-page": 10
-                        }
-                    }
-                ]
-            }
-        ]
+        """
+        拼装插件详情页面，需要返回页面配置，同时附带数据
+        """
+        pass
 
     def _get_search_history_list(self) -> List[Dict]:
         result = []
@@ -644,14 +654,14 @@ class HDHiveSearch(_PluginBase):
         userid = event_data.get('userid') or event_data.get('user')
 
         # 1. 检查是否为指定网盘类型（数字.网盘类型）- 最具体的模式要最先检查
-        if re.match(r'^(\d+)\.(115|123|quark|baidu)[\?您]?$', text):
+        if re.match(r'^(\d+)\.(115|123|quark|baidu)[?？]?$', text):
             match = re.match(r'^(\d+)\.(115|123|quark|baidu)', text)
             index = int(match.group(1))
             pan_type = match.group(2)
             self._handle_selection(channel, userid, index, pan_type)
 
-        # 2. 检查是否为资源详情查看（纯数字）
-        elif re.match(r'^(\d+)[\?您]?$', text):
+        # 2. 检查是否为资源详情查看（纯数字或数字+问号）
+        elif re.match(r'^(\d+)[?？]?$', text):
             match = re.match(r'^(\d+)', text)
             index = int(match.group(1))
             self._handle_selection(channel, userid, index)
@@ -660,6 +670,15 @@ class HDHiveSearch(_PluginBase):
         elif text.endswith('?') or text.endswith('？'):
             keyword = text[:-1].strip()
             if keyword:
+                # 去重检查：3秒内相同关键词只处理一次
+                cache_key = f"{userid}:{keyword}"
+                current_time = time.time()
+                last_time = self._request_cache.get(cache_key, 0)
+                if current_time - last_time < 3:
+                    logger.debug(f"忽略重复请求: {keyword}")
+                    return
+                self._request_cache[cache_key] = current_time
+
                 logger.info(f'检测到搜索请求: {keyword}')
                 self._handle_search(channel, userid, keyword)
 
@@ -759,13 +778,18 @@ class HDHiveSearch(_PluginBase):
             return None, None
 
     def _sort_resources_by_priority(self, resources: List[Dict]) -> List[Dict]:
-        """按网盘优先级排序资源"""
+        """按网盘优先级排序和过滤资源"""
         priority_map = {
             self._priority_1: 1,
             self._priority_2: 2,
             self._priority_3: 3,
             self._priority_4: 4,
         }
+
+        # 如果所有优先级都是同一个网盘类型，说明用户想要过滤
+        priority_values = [self._priority_1, self._priority_2, self._priority_3, self._priority_4]
+        unique_priorities = set(priority_values)
+        filter_mode = len(unique_priorities) == 1
 
         def get_priority(resource):
             pan_type = resource.get("pan_type", "").lower()
@@ -774,33 +798,62 @@ class HDHiveSearch(_PluginBase):
                     return priority_map[key]
             return 999  # 未知类型排在最后
 
-        return sorted(resources, key=get_priority)
+        sorted_resources = sorted(resources, key=get_priority)
+
+        # 过滤模式：只保留配置优先级的网盘类型
+        if filter_mode and unique_priorities:
+            target_pan = list(unique_priorities)[0].lower()
+            sorted_resources = [r for r in sorted_resources if target_pan in r.get("pan_type", "").lower()]
+
+        return sorted_resources
 
     def _format_search_results(self, keyword: str, resources: List[Dict]) -> str:
         lines = [f"找到 {len(resources)} 个资源:\n"]
-        
+
         for i, res in enumerate(resources[:10], 1):
             title = res.get("title") or "未知标题"
             size = res.get("share_size") or "未知大小"
-            resolution = ", ".join(res.get("video_resolution", []))
-            source = ", ".join(res.get("source", []))
-            subtitle = ", ".join(res.get("subtitle_language", []))
+
+            # 确保这些字段是列表，防止join报错
+            video_res = res.get("video_resolution")
+            resolution = ", ".join(video_res) if isinstance(video_res, list) else str(video_res) if video_res else "未知"
+
+            src = res.get("source")
+            source = ", ".join(src) if isinstance(src, list) else str(src) if src else "未知"
+
+            sub_lang = res.get("subtitle_language")
+            subtitle = ", ".join(sub_lang) if isinstance(sub_lang, list) else str(sub_lang) if sub_lang else "无"
+
             points = res.get("unlock_points")
             is_free = points is None or points == 0
             is_official = res.get("is_official", False)
-            
+
             status = "🆓" if is_free else f"💰{points}积分"
             official = "⭐官方" if is_official else ""
-            
+
             line = f"{i}. {title}\n   大小: {size} | 分辨率: {resolution}\n   来源: {source} | 字幕: {subtitle}\n   {status} {official}\n"
             lines.append(line)
-        
+
         lines.append("\n💡 回复数字查看详情，如「1？」")
         lines.append("💡 指定网盘类型，如「1.115？」")
         return "\n".join(lines)
 
     def _handle_selection(self, channel, userid, index: int, pan_type: Optional[str] = None):
         """处理资源选择"""
+        # 防重复处理：检查是否在处理相同的选择（3秒内）
+        selection_key = f"{userid}:{index}:{pan_type}"
+        current_time = time.time()
+        last_time = self._selection_cache.get(selection_key, 0)
+        if current_time - last_time < 3:
+            logger.debug(f"忽略重复选择请求: {selection_key}")
+            return
+        self._selection_cache[selection_key] = current_time
+
+        # 清理过期的选择缓存（只保留30秒内的）
+        expired_keys = [k for k, v in self._selection_cache.items() if current_time - v > 30]
+        for k in expired_keys:
+            del self._selection_cache[k]
+
         # 查找最近的搜索缓存
         cache_key = None
         for key in sorted(self._search_history.keys(), reverse=True):
@@ -838,20 +891,56 @@ class HDHiveSearch(_PluginBase):
                     self._send_message(channel, userid, "提示", f"该资源不是 {pan_type} 网盘类型。")
                     return
 
-            # 3. 格式化并发送详情
-            message = self._format_resource_detail(detail)
-            self._send_message(channel, userid, "📋 资源详情", message)
+            # 3. 检查资源是否已解锁或免费
+            is_unlocked = detail.get("is_unlocked", False)
+            points = detail.get("unlock_points")
+            is_free = points is None or points == 0
 
-            # 4. 如果是 115 网盘且启用了 CMS，自动转存
-            if detail.get("pan_type") == "115" and self._cms_client:
-                self._handle_cms_transfer(detail, channel, userid)
-            elif detail.get("pan_type") == "115" and not self._cms_client:
-                # 提示可以配置 CMS
-                message += "\n\n💡 提示：配置 CloudSyncMedia 后可自动转存 115 资源"
-                self._send_message(channel, userid, "提示", message)
+            # 免费或已解锁：直接获取链接
+            # 付费资源：自动尝试解锁
+            self._send_unlock_result(detail, channel, userid)
 
         except HDHiveException as e:
             logger.error(f"获取资源详情失败: {e}")
+            self._handle_api_error(e, channel, userid)
+
+    def _send_unlock_result(self, detail: Dict, channel, userid):
+        """发送解锁结果（免费/已解锁资源直接获取链接）"""
+        slug = detail.get("slug")
+        title = detail.get("title") or "未知标题"
+
+        try:
+            # 调用解锁API获取链接
+            unlock_result = self._api.unlock_resource(slug)
+            full_url = unlock_result.get("full_url")
+
+            # 如果是 115 网盘且启用了 CMS，自动转存
+            if detail.get("pan_type") == "115" and self._cms_client and full_url:
+                detail["full_url"] = full_url
+                self._handle_cms_transfer(detail, channel, userid)
+                return
+
+            if full_url:
+                message = f"""✅ 资源链接获取成功！
+
+📋 标题: {title}
+🔗 链接: {full_url}
+📁 网盘: {detail.get('pan_type', '未知')}"""
+
+                # 如果是 115 网盘但没有配置 CMS，合并提示到一条消息
+                if detail.get("pan_type") == "115" and not self._cms_client:
+                    message += "\n\n💡 提示：配置 CloudSyncMedia 后可自动转存 115 资源"
+                    self._send_message(channel, userid, "🔓 解锁成功", message)
+                else:
+                    self._send_message(channel, userid, "🔓 解锁成功", message)
+            else:
+                # 链接为空，可能是已解锁但需要其他操作
+                message = self._format_resource_detail(detail)
+                message += f"\n\n⚠️ 该资源可能已解锁，但未获取到链接"
+                self._send_message(channel, userid, "📋 资源详情", message)
+
+        except HDHiveException as e:
+            logger.error(f"解锁失败: {e}")
             self._handle_api_error(e, channel, userid)
 
     def _format_resource_detail(self, detail: Dict) -> str:
@@ -1245,6 +1334,8 @@ class HDHiveSearch(_PluginBase):
             "enabled": self._enabled,
             "api_key": self._api_key,
             "api_base_url": self._api_base_url,
+            "use_proxy": self._use_proxy,
+            "proxy_url": self._proxy_url,
             "notify": self._notify,
 
             # Premium 配置
