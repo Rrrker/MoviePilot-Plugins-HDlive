@@ -796,64 +796,122 @@ class HDHiveSearch(_PluginBase):
             self._stats['transfer_success_rate'] = round((successful / total) * 100, 2)
 
     def _handle_cms_error(self, error: Exception, channel, userid):
-        """
-        处理 CMS 错误
+        """统一处理 CMS 错误"""
+        error_type = type(error).__name__
 
-        Args:
-            error: CMS 异常对象
-            channel: 消息通道
-            userid: 用户ID
-        """
-        error_msg = str(error)
-
-        # 根据错误类型更新错误统计
-        if "timeout" in error_msg.lower():
+        if error_type == "ConnectionError":
+            message = "❌ CMS 服务器连接失败，请检查 CMS 地址和网络"
             self._error_counts['cms_timeout'] += 1
-            self._send_message(channel, userid, "CMS超时",
-                "CloudSyncMedia请求超时，请稍后重试。")
-        elif "auth" in error_msg.lower() or "unauthorized" in error_msg.lower():
+        elif error_type == "HTTPError" and hasattr(error, 'response') and error.response.status_code == 401:
+            message = "❌ CMS 认证失败，请检查用户名和密码"
             self._error_counts['cms_auth_failed'] += 1
-            self._send_message(channel, userid, "CMS认证失败",
-                "CloudSyncMedia认证失败，请检查配置。")
+        elif "登录失败" in str(error):
+            message = "❌ CMS 登录失败，请检查用户名和密码"
+            self._error_counts['cms_auth_failed'] += 1
         else:
-            self._send_message(channel, userid, "CMS错误", error_msg)
+            message = f"❌ CMS 转存失败: {str(error)}"
+            self._error_counts['cms_timeout'] += 1
+
+        self._send_message(channel, userid, "转存失败", message)
+        logger.error(f"CMS 错误: {error_type} - {str(error)}")
 
         # 保存错误统计
         self.__update_config()
 
     def _handle_api_error(self, error: HDHiveException, channel, userid):
-        """
-        处理 HDHive API 错误
+        """统一处理 HDHive API 错误"""
+        error_code = error.code
 
-        Args:
-            error: HDHive API 异常对象
-            channel: 消息通道
-            userid: 用户ID
-        """
-        error_msg = str(error)
+        # 更新错误统计
+        if error_code not in self._error_counts:
+            self._error_counts[error_code] = 0
+        self._error_counts[error_code] += 1
 
-        # 根据错误类型更新错误统计
-        if "timeout" in error_msg.lower():
-            self._error_counts['api_timeout'] += 1
-            self._send_message(channel, userid, "API超时",
-                "HDHive API请求超时，请稍后重试。")
-        elif "auth" in error_msg.lower() or "unauthorized" in error_msg.lower():
-            self._error_counts['api_auth_failed'] += 1
-            self._send_message(channel, userid, "认证失败",
-                "API Key验证失败，请检查配置。")
-        elif "insufficient" in error_msg.lower() and "points" in error_msg.lower():
-            self._error_counts['insufficient_points'] += 1
-            self._send_message(channel, userid, "积分不足",
-                "您的积分不足，无法解锁此资源。")
-        elif "rate limit" in error_msg.lower():
-            self._error_counts['rate_limit_exceeded'] += 1
-            self._send_message(channel, userid, "请求超限",
-                "请求频率超限，请稍后再试。")
-        else:
-            self._send_message(channel, userid, "API错误", error_msg)
+        # 根据错误类型返回用户友好的消息
+        error_messages = {
+            "MISSING_API_KEY": "❌ API Key 未配置",
+            "INVALID_API_KEY": "❌ API Key 无效，请检查配置",
+            "DISABLED_API_KEY": "❌ API Key 已被禁用",
+            "EXPIRED_API_KEY": "❌ API Key 已过期",
+            "VIP_REQUIRED": "❌ 此功能需要 Premium 会员",
+            "RATE_LIMIT_EXCEEDED": f"⏳ 请求过于频繁，{error.description}",
+            "INSUFFICIENT_POINTS": "💰 积分不足，无法解锁此资源",
+            "TIMEOUT": "⏱️ 请求超时，请稍后重试",
+            "CONNECTION_ERROR": "🌐 网络连接失败，请检查网络",
+        }
+
+        message = error_messages.get(error_code, f"❌ 未知错误: {error.message}")
+        self._send_message(channel, userid, "操作失败", message)
+
+        # 记录日志
+        logger.error(f"HDHive API 错误: [{error_code}] {error.message} - {error.description}")
 
         # 保存错误统计
         self.__update_config()
+
+    def post_message(self, channel, title: str, text: str, userid: str = None):
+        """发送消息，自动处理微信格式兼容"""
+        # 检测是否为微信通知渠道
+        if self._is_wechat_channel(channel):
+            formatted_text = self._format_message_for_wechat(text)
+        else:
+            formatted_text = text
+
+        # 调用父类的post_message方法
+        super().post_message(channel=channel, title=title, text=formatted_text, userid=userid)
+
+    def _is_wechat_channel(self, channel) -> bool:
+        """检测是否为微信通知渠道"""
+        try:
+            if hasattr(channel, 'name'):
+                channel_name = str(channel.name).lower()
+            elif hasattr(channel, 'type'):
+                channel_name = str(channel.type).lower()
+            else:
+                channel_name = str(channel).lower()
+
+            return 'wechat' in channel_name or 'wecom' in channel_name or 'wework' in channel_name
+        except Exception:
+            return False
+
+    def _format_message_for_wechat(self, text: str) -> str:
+        """格式化消息以兼容微信企业应用显示"""
+        lines = text.split('\n')
+        formatted_lines = []
+
+        for line in lines:
+            stripped_line = line.strip()
+
+            # 空行处理：连续空行只保留一个
+            if not stripped_line:
+                if formatted_lines and formatted_lines[-1] != '':
+                    formatted_lines.append('')
+                continue
+
+            # 对于标题行（包含emoji和中文冒号），前后加空行
+            if ('🎬' in stripped_line or '🎯' in stripped_line or
+                '✅' in stripped_line or '❌' in stripped_line) and '：' in stripped_line:
+                if formatted_lines and formatted_lines[-1] != '':
+                    formatted_lines.append('')
+                formatted_lines.append(stripped_line)
+                formatted_lines.append('')
+            # 对于编号列表项
+            elif re.match(r'^\d+\.', stripped_line) or re.match(r'^【\d+】', stripped_line):
+                if formatted_lines and formatted_lines[-1] != '':
+                    formatted_lines.append('')
+                formatted_lines.append(stripped_line)
+            # 对于缩进的详情行
+            elif stripped_line.startswith(' ') or stripped_line.startswith('   '):
+                formatted_lines.append(stripped_line)
+            # 对于分隔符和提示信息
+            elif stripped_line.startswith('---') or stripped_line.startswith('💡') or stripped_line.startswith('📋'):
+                if formatted_lines and formatted_lines[-1] != '':
+                    formatted_lines.append('')
+                formatted_lines.append(stripped_line)
+            else:
+                formatted_lines.append(stripped_line)
+
+        return '\n'.join(formatted_lines)
 
     def _send_message(self, channel, userid, title: str, text: str):
         if self._notify:
