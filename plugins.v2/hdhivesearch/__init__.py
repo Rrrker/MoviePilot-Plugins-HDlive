@@ -634,11 +634,9 @@ class HDHiveSearch(_PluginBase):
             f"已解锁: {'是' if is_unlocked else '否'}",
             f"官方资源: {'是' if is_official else '否'}",
             f"验证状态: {validate_status}",
-            f"最后验证: {last_validated}",
-            "",
-            "💡 回复「解锁」使用积分解锁此资源"
+            f"最后验证: {last_validated}"
         ]
-        
+
         return "\n".join(lines)
 
     def _handle_user_info(self, channel, userid):
