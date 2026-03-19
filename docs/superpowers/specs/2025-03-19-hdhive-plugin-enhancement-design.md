@@ -43,6 +43,56 @@ hdhivesearch/
 
 ### 3.0 资源搜索功能设计
 
+#### 3.0.0 用户消息监听和解析
+
+**通过 MoviePilot 事件系统监听用户消息：**
+
+```python
+@eventmanager.register(EventType.UserMessage)
+def handle_user_message(self, event: Event):
+    """
+    监听用户消息，识别搜索请求和资源选择
+    """
+    if not self._enabled:
+        return
+
+    event_data = event.event_data
+    if not event_data:
+        return
+
+    # 获取消息内容
+    text = event_data.get("text", "").strip()
+    if not text:
+        return
+
+    channel = event_data.get("channel")
+    userid = event_data.get("userid") or event_data.get("user")
+
+    # 1. 检查是否为搜索请求（以？或?结尾）
+    if text.endswith("?") or text.endswith("？"):
+        keyword = text[:-1].strip()
+        if keyword:
+            logger.info(f"检测到搜索请求: {keyword}")
+            self._handle_search(channel, userid, keyword)
+
+    # 2. 检查是否为资源详情查看（纯数字）
+    elif re.match(r'^(\d+)[\?？]?$', text):
+        match = re.match(r'^(\d+)', text)
+        index = int(match.group(1))
+        self._handle_selection(channel, userid, index)
+
+    # 3. 检查是否为指定网盘类型（数字.网盘类型）
+    elif re.match(r'^(\d+)\.(115|123|quark|baidu)[\?您]?$', text):
+        match = re.match(r'^(\d+)\.(115|123|quark|baidu)', text)
+        index = int(match.group(1))
+        pan_type = match.group(2)
+        self._handle_selection(channel, userid, index, pan_type)
+```
+
+**与 Nullbr 的关键区别：**
+- Nullbr: 直接用影片名搜索 API，不需要 TMDB ID
+- HDHive: **必须先用影片名获取 TMDB ID**，然后再调用 HDHive API
+
 #### 3.0.1 搜索工作流程
 
 **完整搜索流程：**
@@ -111,6 +161,19 @@ def _handle_search(self, channel, userid, keyword: str):
 
 #### 3.0.2 TMDB 识别流程
 
+**为什么需要 TMDB ID：**
+
+HDHive API 的搜索接口需要 TMDB ID 作为参数：
+```
+GET /api/open/resources/:type/:tmdb_id
+```
+
+这与 Nullbr API 不同：
+- **Nullbr**: `search(keyword)` - 直接用影片名搜索
+- **HDHive**: 必须提供 TMDB ID 和媒体类型
+
+因此，我们需要先用 MoviePilot 的媒体识别能力将用户输入的影片名转换为 TMDB ID。
+
 **通过 MoviePilot 媒体识别链获取 TMDB ID：**
 
 ```python
@@ -118,30 +181,49 @@ def _search_tmdb(self, keyword: str) -> Tuple[Optional[str], Optional[str]]:
     """
     通过影片名获取 TMDB ID 和媒体类型
     使用 MoviePilot 的媒体识别链
+
+    Args:
+        keyword: 用户输入的影片名（如 "权力的游戏"）
+
+    Returns:
+        (tmdb_id, media_type) 或 (None, None)
+        - tmdb_id: TMDB ID（字符串，如 "1399"）
+        - media_type: "movie" 或 "tv"
     """
     try:
         from app.chain.media import MediaChain
         from app.core.metainfo import MetaInfo
         from app.schemas import MediaType
 
-        # 1. 解析影片名
+        # 1. 解析影片名（MoviePilot 的元信息解析器）
         meta = MetaInfo(keyword)
+        # meta 会解析出：年份、季集信息、标题等
 
         # 2. 调用 MoviePilot 媒体识别链
+        #    这是 MoviePilot 内置的媒体识别系统
+        #    会调用 TMDB API 获取准确的媒体信息
         mediainfo = MediaChain().recognize_by_meta(meta)
 
         if mediainfo:
             tmdb_id = str(mediainfo.tmdb_id)
-            # 判断媒体类型：电影 或 电视剧
+            # 判断媒体类型：电影(movie) 或 电视剧(tv)
             media_type = "movie" if mediainfo.type == MediaType.MOVIE else "tv"
             logger.info(f"TMDB识别成功: {keyword} → TMDB:{tmdb_id} ({media_type})")
             return tmdb_id, media_type
+        else:
+            logger.warning(f"TMDB识别失败: 未找到「{keyword}」的媒体信息")
+            return None, None
 
     except Exception as e:
-        logger.error(f"TMDB搜索失败: {e}")
-
-    return None, None
+        logger.error(f"TMDB搜索异常: {e}")
+        return None, None
 ```
+
+**关键点：**
+1. 使用 MoviePilot 内置的 `MediaChain` 进行媒体识别
+2. `MediaChain().recognize_by_meta()` 会自动调用 TMDB API
+3. 返回的 `mediainfo` 对象包含完整的媒体信息
+4. 提取 `tmdb_id` 和 `type` 用于后续 HDHive API 调用
 
 #### 3.0.3 HDHive API 调用
 
