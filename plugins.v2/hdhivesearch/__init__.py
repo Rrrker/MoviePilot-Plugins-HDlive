@@ -551,51 +551,59 @@ class HDHiveSearch(_PluginBase):
         return "\n".join(lines)
 
     def _handle_selection(self, channel, userid, index: int, pan_type: Optional[str] = None):
+        """处理资源选择"""
+        # 查找最近的搜索缓存
         cache_key = None
         for key in sorted(self._search_history.keys(), reverse=True):
             if key.startswith(str(userid)):
                 cache_key = key
                 break
-        
+
         if not cache_key:
             self._send_message(channel, userid, "提示", "搜索记录已过期，请重新搜索。")
             return
-        
+
         cache_data = self._search_history.get(cache_key)
         if not cache_data:
             self._send_message(channel, userid, "提示", "搜索记录不存在，请重新搜索。")
             return
-        
+
         resources = cache_data.get("resources", [])
         if index < 1 or index > len(resources):
             self._send_message(channel, userid, "提示", f"无效的选择，请输入1-{len(resources)}之间的数字。")
             return
-        
+
         resource = resources[index - 1]
         slug = resource.get("slug")
-        
+
         try:
+            # 1. 获取资源详情
             detail = self._api.get_share_detail(slug)
             if not detail:
                 self._send_message(channel, userid, "错误", "获取资源详情失败。")
                 return
-            
+
+            # 2. 如果指定了网盘类型，过滤
             if pan_type:
-                detail["filter_pan_type"] = pan_type
-            
+                if detail.get("pan_type", "").lower() != pan_type.lower():
+                    self._send_message(channel, userid, "提示", f"该资源不是 {pan_type} 网盘类型。")
+                    return
+
+            # 3. 格式化并发送详情
             message = self._format_resource_detail(detail)
             self._send_message(channel, userid, "📋 资源详情", message)
-            
-            self._search_history[f"{cache_key}_detail"] = {
-                "slug": slug,
-                "resource": detail,
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            self.__update_config()
-            
+
+            # 4. 如果是 115 网盘且启用了 CMS，自动转存
+            if detail.get("pan_type") == "115" and self._cms_client:
+                self._handle_cms_transfer(detail, channel, userid)
+            elif detail.get("pan_type") == "115" and not self._cms_client:
+                # 提示可以配置 CMS
+                message += "\n\n💡 提示：配置 CloudSyncMedia 后可自动转存 115 资源"
+                self._send_message(channel, userid, "提示", message)
+
         except HDHiveException as e:
             logger.error(f"获取资源详情失败: {e}")
-            self._send_message(channel, userid, "错误", str(e))
+            self._handle_api_error(e, channel, userid)
 
     def _format_resource_detail(self, detail: Dict) -> str:
         title = detail.get("title") or "未知标题"
@@ -738,6 +746,82 @@ class HDHiveSearch(_PluginBase):
    115、123、夸克、百度、ed2k等
 """
         self._send_message(channel, userid, "帮助", help_text)
+
+    def _handle_cms_transfer(self, detail: Dict, channel, userid):
+        """处理 CMS 转存"""
+        slug = detail.get("slug")
+
+        try:
+            # 1. 解锁获取实际链接
+            unlock_result = self._api.unlock_resource(slug)
+            full_url = unlock_result.get("full_url")
+
+            if not full_url:
+                self._send_message(channel, userid, "转存失败", "无法获取资源链接")
+                return
+
+            # 2. 调用 CMS 转存
+            self._stats['cms_transfers'] += 1
+            cms_result = self._cms_client.add_share_down(full_url)
+
+            # 3. 更新统计
+            if cms_result.get('code') == 200:
+                self._stats['successful_transfers'] += 1
+                self._stats['last_transfer_time'] = datetime.now().isoformat()
+                self._update_transfer_success_rate()
+
+                # 4. 发送成功通知
+                message = f"""✅ 转存成功
+
+{cms_result.get('message', '资源已添加到下载队列')}
+
+📊 转存统计: 成功 {self._stats['successful_transfers']}/{self._stats['cms_transfers']}
+"""
+                self._send_message(channel, userid, "📦 转存成功", message.strip())
+            else:
+                self._stats['failed_transfers'] += 1
+                self._handle_cms_error(Exception(cms_result.get('message', '转存失败')), channel, userid)
+
+            # 5. 持久化配置
+            self.__update_config()
+
+        except Exception as e:
+            self._stats['failed_transfers'] += 1
+            logger.error(f"CMS转存失败: {e}")
+            self._handle_cms_error(e, channel, userid)
+
+    def _update_transfer_success_rate(self):
+        """更新转存成功率"""
+        total = self._stats['cms_transfers']
+        if total > 0:
+            successful = self._stats['successful_transfers']
+            self._stats['transfer_success_rate'] = round((successful / total) * 100, 2)
+
+    def _handle_cms_error(self, error: Exception, channel, userid):
+        """
+        处理 CMS 错误
+
+        Args:
+            error: CMS 异常对象
+            channel: 消息通道
+            userid: 用户ID
+        """
+        error_msg = str(error)
+
+        # 根据错误类型更新错误统计
+        if "timeout" in error_msg.lower():
+            self._error_counts['cms_timeout'] += 1
+            self._send_message(channel, userid, "CMS超时",
+                "CloudSyncMedia请求超时，请稍后重试。")
+        elif "auth" in error_msg.lower() or "unauthorized" in error_msg.lower():
+            self._error_counts['cms_auth_failed'] += 1
+            self._send_message(channel, userid, "CMS认证失败",
+                "CloudSyncMedia认证失败，请检查配置。")
+        else:
+            self._send_message(channel, userid, "CMS错误", error_msg)
+
+        # 保存错误统计
+        self.__update_config()
 
     def _handle_api_error(self, error: HDHiveException, channel, userid):
         """
