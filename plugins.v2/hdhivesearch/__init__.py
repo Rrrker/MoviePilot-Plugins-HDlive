@@ -146,6 +146,13 @@ class HDHiveSearch(_PluginBase):
         except Exception as e:
             logger.error(f"验证Premium用户状态失败: {e}")
 
+    def _check_premium_access(self, feature_name: str) -> bool:
+        """检查是否有权限访问Premium功能"""
+        if not self._is_premium_user:
+            logger.warning(f"尝试访问Premium功能 {feature_name} 被拒绝")
+            return False
+        return True
+
     def get_state(self) -> bool:
         return self._enabled
 
@@ -649,24 +656,30 @@ class HDHiveSearch(_PluginBase):
         return "\n".join(lines)
 
     def _handle_user_info(self, channel, userid):
+        """处理用户信息查询（Premium功能）"""
+        if not self._check_premium_access("用户信息查询"):
+            self._send_message(channel, userid, "权限不足",
+                "此功能需要Premium会员，请在插件配置中启用Premium用户选项")
+            return
+
         if not self._api:
             return
-        
+
         try:
             user_info = self._api.get_user_info()
             if not user_info:
                 self._send_message(channel, userid, "错误", "获取用户信息失败，请检查API Key是否正确。")
                 return
-            
+
             nickname = user_info.get("nickname", "未知")
             is_vip = user_info.get("is_vip", False)
             vip_expire = user_info.get("vip_expiration_date", "无")
             points = user_info.get("user_meta", {}).get("points", 0)
             signin_days = user_info.get("user_meta", {}).get("signin_days_total", 0)
             share_num = user_info.get("user_meta", {}).get("share_num", 0)
-            
+
             vip_status = f"✅ VIP (到期: {vip_expire})" if is_vip else "❌ 普通用户"
-            
+
             message = [
                 f"用户名: {nickname}",
                 f"会员状态: {vip_status}",
@@ -674,33 +687,45 @@ class HDHiveSearch(_PluginBase):
                 f"累计签到: {signin_days}天",
                 f"分享数量: {share_num}"
             ]
-            
+
             self._send_message(channel, userid, "👤 用户信息", "\n".join(message))
-            
+
         except HDHiveException as e:
             logger.error(f"获取用户信息失败: {e}")
             self._send_message(channel, userid, "错误", str(e))
 
     def _handle_checkin(self, channel, userid):
+        """处理每日签到（Premium功能）"""
+        if not self._check_premium_access("每日签到"):
+            self._send_message(channel, userid, "权限不足",
+                "此功能需要Premium会员，请在插件配置中启用Premium用户选项")
+            return
+
         if not self._api:
             return
-        
+
         try:
             result = self._api.checkin()
             message = result.get("message", "签到成功")
             points = result.get("points", 0)
             total_days = result.get("total_days", 0)
-            
+
             self._send_message(
                 channel, userid, "✅ 签到成功",
                 f"{message}\n获得积分: {points}\n累计签到: {total_days}天"
             )
-            
+
         except HDHiveException as e:
             logger.error(f"签到失败: {e}")
             self._send_message(channel, userid, "签到失败", str(e))
 
     def _handle_quota(self, channel, userid):
+        """处理免费额度查询（Premium功能）"""
+        if not self._check_premium_access("免费额度查询"):
+            self._send_message(channel, userid, "权限不足",
+                "此功能需要Premium会员，请在插件配置中启用Premium用户选项")
+            return
+
         if not self._api:
             return
 
