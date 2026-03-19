@@ -376,30 +376,43 @@ class HDHiveSearch(_PluginBase):
 
     @eventmanager.register(EventType.UserMessage)
     def handle_user_message(self, event: Event):
-        if not self._enabled or not self._api:
+        """
+        监听用户消息，识别搜索请求和资源选择
+        """
+        if not self._enabled:
             return
-        
+
         event_data = event.event_data
         if not event_data:
             return
-        
-        text = event_data.get("text", "").strip()
+
+        # 获取消息内容
+        text = event_data.get('text', '').strip()
         if not text:
             return
-        
-        channel = event_data.get("channel")
-        userid = event_data.get("userid") or event_data.get("user")
-        
-        if text.endswith("?") or text.endswith("？"):
+
+        channel = event_data.get('channel')
+        userid = event_data.get('userid') or event_data.get('user')
+
+        # 1. 检查是否为搜索请求（以？或?结尾）
+        if text.endswith('?') or text.endswith('？'):
             keyword = text[:-1].strip()
-            self._handle_search(channel, userid, keyword)
-        elif re.match(r'^(\d+)(?:\.(.+))?[\?？]?$', text):
-            match = re.match(r'^(\d+)(?:\.(.+))?[\?？]?$', text)
+            if keyword:
+                logger.info(f'检测到搜索请求: {keyword}')
+                self._handle_search(channel, userid, keyword)
+
+        # 2. 检查是否为资源详情查看（纯数字）
+        elif re.match(r'^(\d+)[\?您]?$', text):
+            match = re.match(r'^(\d+)', text)
+            index = int(match.group(1))
+            self._handle_selection(channel, userid, index)
+
+        # 3. 检查是否为指定网盘类型（数字.网盘类型）
+        elif re.match(r'^(\d+)\.(115|123|quark|baidu)[\?您]?$', text):
+            match = re.match(r'^(\d+)\.(115|123|quark|baidu)', text)
             index = int(match.group(1))
             pan_type = match.group(2)
             self._handle_selection(channel, userid, index, pan_type)
-        elif re.match(r'^[\?？]$', text):
-            self._show_help(channel, userid)
 
     def _handle_search(self, channel, userid, keyword: str):
         if not keyword:
