@@ -17,9 +17,9 @@ from .hdhive_api import HDHiveAPI, HDHiveException
 
 class HDHiveSearch(_PluginBase):
     plugin_name = "HDHive资源搜索"
-    plugin_desc = "通过HDHive API搜索网盘资源，支持115/123/夸克/百度网盘等。"
+    plugin_desc = "支持积分解锁、每日签到、VIP免费额度、CMS自动转存、统计系统、智能重试、微信格式化、优先级配置、Premium控制。"
     plugin_icon = "Alist_B.png"
-    plugin_version = "1.0.0"
+    plugin_version = "2.0.0"
     plugin_author = "HDHive"
     author_url = "https://hdhive.com"
     plugin_config_prefix = "hdhivesearch_"
