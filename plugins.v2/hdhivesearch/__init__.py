@@ -179,6 +179,13 @@ class HDHiveSearch(_PluginBase):
                 "desc": "HDHive免费额度",
                 "category": "资源搜索",
                 "data": {"action": "hdhive_quota"}
+            },
+            {
+                "cmd": "/hdhive_stats",
+                "event": EventType.PluginAction,
+                "desc": "HDHive插件统计",
+                "category": "资源搜索",
+                "data": {"action": "hdhive_stats"}
             }
         ]
 
@@ -352,19 +359,19 @@ class HDHiveSearch(_PluginBase):
     def handle_plugin_action(self, event: Event):
         if not self._enabled or not self._api:
             return
-        
+
         event_data = event.event_data
         if not event_data:
             return
-        
+
         action = event_data.get("action")
         if not action or not action.startswith("hdhive_"):
             return
-        
+
         channel = event_data.get("channel")
         userid = event_data.get("user")
         text = event_data.get("text", "")
-        
+
         if action == "hdhive_search":
             self._handle_search(channel, userid, text)
         elif action == "hdhive_me":
@@ -373,6 +380,8 @@ class HDHiveSearch(_PluginBase):
             self._handle_checkin(channel, userid)
         elif action == "hdhive_quota":
             self._handle_quota(channel, userid)
+        elif action == "hdhive_stats":
+            self._handle_stats_query(channel, userid)
 
     @eventmanager.register(EventType.UserMessage)
     def handle_user_message(self, event: Event):
@@ -694,7 +703,7 @@ class HDHiveSearch(_PluginBase):
     def _handle_quota(self, channel, userid):
         if not self._api:
             return
-        
+
         try:
             quota = self._api.get_weekly_free_quota()
             is_forever_vip = quota.get("is_forever_vip", False)
@@ -702,19 +711,67 @@ class HDHiveSearch(_PluginBase):
             used = quota.get("used", 0)
             remaining = quota.get("remaining", 0)
             unlimited = quota.get("unlimited", False)
-            
+
             if not is_forever_vip:
                 message = "您不是VIP用户，无法使用免费额度功能。"
             elif unlimited:
                 message = f"永久VIP用户，无限制解锁官方资源。\n已使用: {used}次"
             else:
                 message = f"每周免费额度: {limit}次\n已使用: {used}次\n剩余: {remaining}次"
-            
+
             self._send_message(channel, userid, "📊 免费额度", message)
-            
+
         except HDHiveException as e:
             logger.error(f"获取免费额度失败: {e}")
             self._send_message(channel, userid, "错误", str(e))
+
+    def _handle_stats_query(self, channel, userid):
+        """处理统计查询"""
+        # 计算成功率
+        search_total = self._stats['total_searches']
+        search_success_rate = round((self._stats['successful_searches'] / search_total * 100), 1) if search_total > 0 else 0
+
+        transfer_total = self._stats['cms_transfers']
+        transfer_success_rate = self._stats['transfer_success_rate']
+
+        # 格式化时间
+        last_search = self._stats.get('last_search_time', '未搜索')
+        last_transfer = self._stats.get('last_transfer_time', '未转存')
+
+        if last_search != '未搜索':
+            try:
+                dt = datetime.fromisoformat(last_search)
+                last_search = dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                pass
+
+        if last_transfer != '未转存':
+            try:
+                dt = datetime.fromisoformat(last_transfer)
+                last_transfer = dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                pass
+
+        # 构建统计消息
+        message = f"""
+📊 HDHive 插件统计
+
+🔍 搜索统计
+   总搜索次数: {search_total}
+   成功: {self._stats['successful_searches']} ({search_success_rate}%)
+   失败: {self._stats['failed_searches']}
+
+📦 转存统计
+   转存次数: {transfer_total}
+   成功: {self._stats['successful_transfers']} ({transfer_success_rate}%)
+   失败: {self._stats['failed_transfers']}
+
+⏰ 最后活动
+   搜索: {last_search}
+   转存: {last_transfer}
+"""
+
+        self._send_message(channel, userid, "📊 插件统计", message.strip())
 
     def _show_help(self, channel, userid):
         help_text = """
@@ -739,6 +796,7 @@ class HDHiveSearch(_PluginBase):
    /hdhive_me - 查看用户信息
    /hdhive_checkin - 每日签到
    /hdhive_quota - 查看免费额度
+   /hdhive_stats - 查看插件统计
 
 📌 支持网盘:
    115、123、夸克、百度、ed2k等
