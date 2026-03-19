@@ -379,7 +379,7 @@ class HDHiveSearch(_PluginBase):
         """
         监听用户消息，识别搜索请求和资源选择
         """
-        if not self._enabled:
+        if not self._enabled or not self._api:
             return
 
         event_data = event.event_data
