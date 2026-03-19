@@ -41,6 +41,274 @@ hdhivesearch/
 
 ## 3. 核心功能设计
 
+### 3.0 资源搜索功能设计
+
+#### 3.0.1 搜索工作流程
+
+**完整搜索流程：**
+
+```python
+def _handle_search(self, channel, userid, keyword: str):
+    """
+    处理用户搜索请求
+    流程：影片名 → TMDB识别 → HDHive API搜索 → 按优先级排序 → 返回结果
+    """
+    if not keyword:
+        self._show_help(channel, userid)
+        return
+
+    try:
+        # 1. 更新搜索统计
+        self._stats['total_searches'] += 1
+
+        # 2. 通过 MoviePilot 媒体识别链获取 TMDB 信息
+        tmdb_id, media_type = self._search_tmdb(keyword)
+        if not tmdb_id:
+            self._stats['failed_searches'] += 1
+            self._send_message(channel, userid, "搜索失败",
+                f"未找到影片「{keyword}」的TMDB信息，请确认影片名称是否正确。")
+            return
+
+        # 3. 调用 HDHive API 获取资源列表
+        resources = self._api.get_resources(media_type, tmdb_id)
+        if not resources:
+            self._stats['failed_searches'] += 1
+            self._send_message(channel, userid, "搜索结果",
+                f"影片「{keyword}」暂无可用资源。")
+            return
+
+        # 4. 按网盘优先级排序
+        sorted_resources = self._sort_resources_by_priority(resources)
+
+        # 5. 缓存搜索结果（5分钟有效期）
+        cache_key = f"{userid}_{int(time.time() // 300)}"
+        self._search_history[cache_key] = {
+            "keyword": keyword,
+            "tmdb_id": tmdb_id,
+            "media_type": media_type,
+            "resources": sorted_resources,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "count": len(sorted_resources)
+        }
+
+        # 6. 更新成功统计
+        self._stats['successful_searches'] += 1
+        self._stats['last_search_time'] = datetime.now().isoformat()
+
+        # 7. 发送搜索结果
+        message = self._format_search_results(keyword, sorted_resources)
+        self._send_message(channel, userid, f"🔍 搜索结果 - {keyword}", message)
+
+    except HDHiveException as e:
+        logger.error(f"HDHive搜索失败: {e}")
+        self._stats['failed_searches'] += 1
+        self._handle_api_error(e, channel, userid)
+    except Exception as e:
+        logger.error(f"搜索异常: {e}")
+        self._stats['failed_searches'] += 1
+        self._send_message(channel, userid, "搜索失败", f"发生错误: {str(e)}")
+```
+
+#### 3.0.2 TMDB 识别流程
+
+**通过 MoviePilot 媒体识别链获取 TMDB ID：**
+
+```python
+def _search_tmdb(self, keyword: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    通过影片名获取 TMDB ID 和媒体类型
+    使用 MoviePilot 的媒体识别链
+    """
+    try:
+        from app.chain.media import MediaChain
+        from app.core.metainfo import MetaInfo
+        from app.schemas import MediaType
+
+        # 1. 解析影片名
+        meta = MetaInfo(keyword)
+
+        # 2. 调用 MoviePilot 媒体识别链
+        mediainfo = MediaChain().recognize_by_meta(meta)
+
+        if mediainfo:
+            tmdb_id = str(mediainfo.tmdb_id)
+            # 判断媒体类型：电影 或 电视剧
+            media_type = "movie" if mediainfo.type == MediaType.MOVIE else "tv"
+            logger.info(f"TMDB识别成功: {keyword} → TMDB:{tmdb_id} ({media_type})")
+            return tmdb_id, media_type
+
+    except Exception as e:
+        logger.error(f"TMDB搜索失败: {e}")
+
+    return None, None
+```
+
+#### 3.0.3 HDHive API 调用
+
+**在 `hdhive_api.py` 中实现资源搜索接口：**
+
+```python
+class HDHiveAPI:
+    def get_resources(self, media_type: str, tmdb_id: str) -> List[Dict]:
+        """
+        通过 TMDB ID 获取资源列表
+
+        Args:
+            media_type: 媒体类型 ("movie" 或 "tv")
+            tmdb_id: TMDB ID
+
+        Returns:
+            资源列表，每个资源包含：
+            - slug: 资源唯一标识
+            - title: 资源标题
+            - pan_type: 网盘类型 (115, 123, quark, baidu, ed2k, magnet)
+            - share_size: 资源大小
+            - video_resolution: 视频分辨率列表
+            - source: 资源来源列表
+            - subtitle_language: 字幕语言列表
+            - subtitle_type: 字幕类型列表
+            - remark: 备注
+            - unlock_points: 解锁积分（null 或 0 表示免费）
+            - is_official: 是否官方资源
+            - is_unlocked: 当前用户是否已解锁
+            - validate_status: 验证状态
+            - last_validated_at: 最后验证时间
+        """
+        endpoint = f"/resources/{media_type}/{tmdb_id}"
+
+        try:
+            # 使用带重试的请求方法
+            result = self._request_with_fallback("GET", endpoint)
+
+            # HDHive API 返回格式: {"success": true, "data": [...]}
+            if isinstance(result, dict) and "data" in result:
+                resources = result.get("data", [])
+            elif isinstance(result, list):
+                resources = result
+            else:
+                resources = []
+
+            logger.info(f"HDHive API 搜索成功: TMDB:{tmdb_id}, 找到 {len(resources)} 个资源")
+            return resources
+
+        except HDHiveException as e:
+            logger.error(f"HDHive API 搜索失败: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"HDHive API 搜索异常: {e}")
+            raise HDHiveException("UNKNOWN_ERROR", "搜索异常", str(e))
+```
+
+#### 3.0.4 API 响应示例
+
+**HDHive API 响应格式：**
+
+```json
+{
+  "success": true,
+  "code": "200",
+  "message": "success",
+  "data": [
+    {
+      "slug": "a1b2c3d4e5f647898765432112345678",
+      "title": "Fight Club 4K REMUX",
+      "pan_type": "115",
+      "share_size": "58.3 GB",
+      "video_resolution": ["2160p"],
+      "source": ["REMUX"],
+      "subtitle_language": ["中文", "英文"],
+      "subtitle_type": ["外挂"],
+      "remark": "中英双字",
+      "unlock_points": 10,
+      "unlocked_users_count": 42,
+      "validate_status": "valid",
+      "validate_message": null,
+      "last_validated_at": "2025-01-08 12:00:00",
+      "is_official": true,
+      "is_unlocked": false,
+      "user": {
+        "id": 1,
+        "nickname": "HDHive",
+        "avatar_url": "https://example.com/avatar.jpg"
+      },
+      "created_at": "2025-01-01 10:00:00"
+    }
+  ],
+  "meta": {
+    "total": 1
+  }
+}
+```
+
+#### 3.0.5 搜索结果格式化
+
+```python
+def _format_search_results(self, keyword: str, resources: List[Dict]) -> str:
+    """格式化搜索结果为用户友好的消息"""
+    lines = [f"找到 {len(resources)} 个资源:\n"]
+
+    for i, res in enumerate(resources[:10], 1):  # 最多显示10个
+        title = res.get("title") or "未知标题"
+        size = res.get("share_size") or "未知大小"
+        resolution = ", ".join(res.get("video_resolution", []))
+        source = ", ".join(res.get("source", []))
+        subtitle = ", ".join(res.get("subtitle_language", []))
+        points = res.get("unlock_points")
+        is_free = points is None or points == 0
+        is_official = res.get("is_official", False)
+
+        status = "🆓" if is_free else f"💰{points}积分"
+        official = "⭐官方" if is_official else ""
+
+        line = f"{i}. {title}\n   大小: {size} | 分辨率: {resolution}\n   来源: {source} | 字幕: {subtitle}\n   {status} {official}\n"
+        lines.append(line)
+
+    lines.append("\n💡 回复数字查看详情，如「1？」")
+    lines.append("💡 指定网盘类型，如「1.115？」")
+    return "\n".join(lines)
+```
+
+#### 3.0.6 用户交互流程
+
+**完整用户交互示例：**
+
+```
+用户: 权力的游戏？
+
+插件: [调用 MediaChain 识别 TMDB]
+      TMDB ID: 1399, 类型: tv
+
+      [调用 HDHive API 搜索]
+      GET /api/open/resources/tv/1399
+
+      [按优先级排序资源]
+      [发送结果]
+
+🔍 搜索结果 - 权力的游戏
+找到 15 个资源:
+
+1. 权力的游戏 S01-S08 Complete BluRay REMUX
+   大小: 285.6 GB | 分辨率: 1080p
+   来源: REMUX | 字幕: 中文, 英文
+   💰20积分 ⭐官方
+
+2. 权力的游戏 S01-S08 4K WEB-DL
+   大小: 156.2 GB | 分辨率: 2160p
+   来源: WEB-DL | 字幕: 中英双字
+   💰15积分
+
+...
+
+💡 回复数字查看详情，如「1？」
+💡 指定网盘类型，如「1.115？」
+
+用户: 1？
+
+插件: [获取资源详情]
+      [如果是 115 且启用 CMS，自动转存]
+      [发送详情和转存结果]
+```
+
 ### 3.1 CMS 自动转存功能
 
 #### 3.1.1 工作流程
