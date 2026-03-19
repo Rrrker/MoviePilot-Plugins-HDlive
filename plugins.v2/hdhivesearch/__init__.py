@@ -102,6 +102,9 @@ class HDHiveSearch(_PluginBase):
             # 加载统计数据
             self._stats = config.get("stats", self._stats)
 
+            # 加载错误统计
+            self._error_counts = config.get("error_counts", self._error_counts)
+
         # 初始化 HDHive API
         if self._enabled and self._api_key:
             self._api = HDHiveAPI(
@@ -697,6 +700,9 @@ class HDHiveSearch(_PluginBase):
 
             # 统计数据
             "stats": self._stats,
+
+            # 错误统计
+            "error_counts": self._error_counts,
 
             # 搜索历史
             "search_history": self._search_history,
