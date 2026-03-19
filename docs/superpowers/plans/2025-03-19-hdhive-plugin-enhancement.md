@@ -198,6 +198,16 @@ git commit -m "feat(hdhivesearch): add CloudSyncMedia client for auto-transfer"
 ```python
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from urllib.parse import urljoin
+from typing import Dict, List, Optional
+import json
+```
+
+在 `hdhive_api.py` 文件顶部添加：
+
+```python
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from typing import Dict, List, Optional
 ```
 
@@ -366,7 +376,18 @@ git commit -m "feat(hdhivesearch): add retry logic with proxy fallback to API cl
 **Files:**
 - Modify: `plugins.v2/hdhivesearch/__init__.py`
 
-- [ ] **Step 1: 在 __init__ 方法中添加新的实例变量**
+- [ ] **Step 1: 添加必要的导入（在文件顶部）**
+
+在 `__init__.py` 文件顶部，现有导入后添加：
+
+```python
+from typing import Tuple, Optional, List, Dict, Any
+from datetime import datetime
+import re
+import time
+```
+
+- [ ] **Step 2: 在 __init__ 方法中添加新的实例变量**
 
 找到 `__init__` 方法，在现有的变量声明后添加：
 
@@ -713,7 +734,6 @@ def _handle_search(self, channel, userid, keyword: str):
         sorted_resources = self._sort_resources_by_priority(resources)
 
         # 4. 缓存搜索结果（5分钟有效期）
-        import time
         cache_key = f"{userid}_{int(time.time() // 300)}"
         self._search_history[cache_key] = {
             "keyword": keyword,
@@ -1176,7 +1196,6 @@ def _handle_stats_query(self, channel, userid):
 
     if last_search != '未搜索':
         try:
-            from datetime import datetime
             dt = datetime.fromisoformat(last_search)
             last_search = dt.strftime("%Y-%m-%d %H:%M")
         except:
@@ -1184,7 +1203,6 @@ def _handle_stats_query(self, channel, userid):
 
     if last_transfer != '未转存':
         try:
-            from datetime import datetime
             dt = datetime.fromisoformat(last_transfer)
             last_transfer = dt.strftime("%Y-%m-%d %H:%M")
         except:
