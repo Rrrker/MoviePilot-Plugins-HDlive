@@ -394,12 +394,12 @@ class HDHiveSearch(_PluginBase):
         channel = event_data.get('channel')
         userid = event_data.get('userid') or event_data.get('user')
 
-        # 1. 检查是否为搜索请求（以？或?结尾）
-        if text.endswith('?') or text.endswith('？'):
-            keyword = text[:-1].strip()
-            if keyword:
-                logger.info(f'检测到搜索请求: {keyword}')
-                self._handle_search(channel, userid, keyword)
+        # 1. 检查是否为指定网盘类型（数字.网盘类型）- 最具体的模式要最先检查
+        if re.match(r'^(\d+)\.(115|123|quark|baidu)[\?您]?$', text):
+            match = re.match(r'^(\d+)\.(115|123|quark|baidu)', text)
+            index = int(match.group(1))
+            pan_type = match.group(2)
+            self._handle_selection(channel, userid, index, pan_type)
 
         # 2. 检查是否为资源详情查看（纯数字）
         elif re.match(r'^(\d+)[\?您]?$', text):
@@ -407,12 +407,12 @@ class HDHiveSearch(_PluginBase):
             index = int(match.group(1))
             self._handle_selection(channel, userid, index)
 
-        # 3. 检查是否为指定网盘类型（数字.网盘类型）
-        elif re.match(r'^(\d+)\.(115|123|quark|baidu)[\?您]?$', text):
-            match = re.match(r'^(\d+)\.(115|123|quark|baidu)', text)
-            index = int(match.group(1))
-            pan_type = match.group(2)
-            self._handle_selection(channel, userid, index, pan_type)
+        # 3. 检查是否为搜索请求（以？或?结尾）- 最宽泛的模式放在最后
+        elif text.endswith('?') or text.endswith('？'):
+            keyword = text[:-1].strip()
+            if keyword:
+                logger.info(f'检测到搜索请求: {keyword}')
+                self._handle_search(channel, userid, keyword)
 
     def _handle_search(self, channel, userid, keyword: str):
         if not keyword:
