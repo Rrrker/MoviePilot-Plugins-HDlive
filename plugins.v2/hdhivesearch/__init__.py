@@ -818,8 +818,10 @@ class HDHiveSearch(_PluginBase):
             pan_type = res.get("pan_type", "未知")
 
             # 标题 + remark
-            title = res.get("title") or "未知标题"
+            title = (res.get("title") or "未知标题").replace("\n", " ").replace("\r", "")
             remark = res.get("remark")
+            if remark:
+                remark = remark.replace("\n", " ").replace("\r", "")
             display_title = f"{title} {remark}" if remark else title
 
             # 大小
