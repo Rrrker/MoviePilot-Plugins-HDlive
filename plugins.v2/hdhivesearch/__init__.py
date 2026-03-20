@@ -653,6 +653,13 @@ class HDHiveSearch(_PluginBase):
         channel = event_data.get('channel')
         userid = event_data.get('userid') or event_data.get('user')
 
+        # 添加调试日志
+        logger.info(f'[HDHiveSearch] 收到消息 - channel={channel}, userid={userid}, text={text}')
+
+        # 检查 userid 是否有效
+        if not userid:
+            logger.warning(f'[HDHiveSearch] userid 为空，消息将广播给所有用户')
+
         # 1. 检查是否为指定网盘类型（数字.网盘类型）- 最具体的模式要最先检查
         if re.match(r'^(\d+)\.(115|123|quark|baidu)[?？]?$', text):
             match = re.match(r'^(\d+)\.(115|123|quark|baidu)', text)
@@ -817,22 +824,16 @@ class HDHiveSearch(_PluginBase):
             # 网盘
             pan_type = res.get("pan_type", "未知")
 
-            # 标题 + remark
+            # 标题（只保留名称，年份等）
             title = (res.get("title") or "未知标题").replace("\n", " ").replace("\r", "")
+
+            # remark（清理换行符）
             remark = res.get("remark")
             if remark:
                 remark = remark.replace("\n", " ").replace("\r", "")
-            display_title = f"{title} {remark}" if remark else title
 
             # 大小
             size = res.get("share_size") or "未知大小"
-
-            # 分辨率 + 来源
-            video_res = res.get("video_resolution")
-            resolution = ", ".join(video_res) if isinstance(video_res, list) else str(video_res) if video_res else ""
-            source = res.get("source")
-            source_str = ", ".join(source) if isinstance(source, list) else str(source) if source else ""
-            res_source = f"{resolution} {source_str}".strip() if resolution or source_str else "未知"
 
             # 积分状态
             points = res.get("unlock_points")
@@ -843,8 +844,9 @@ class HDHiveSearch(_PluginBase):
             is_official = res.get("is_official", False)
             official_str = " 官方⭐" if is_official else ""
 
-            # 拼接一行
-            line = f"{ordinal} {pan_type} | {display_title} | {size} | {res_source} | {points_str}{official_str}"
+            # 拼接一行：序号 网盘 | 标题 | remark | 大小 | 积分状态
+            remark_part = f" | {remark}" if remark else ""
+            line = f"{ordinal} {pan_type} | {title}{remark_part} | {size} | {points_str}{official_str}"
             lines.append(line)
             lines.append('')
 
@@ -1370,6 +1372,7 @@ class HDHiveSearch(_PluginBase):
 
     def _send_message(self, channel, userid, title: str, text: str):
         if self._notify:
+            logger.info(f'[HDHiveSearch] 发送消息 - channel={channel}, userid={userid}, title={title}')
             self.post_message(
                 channel=channel,
                 title=title,
