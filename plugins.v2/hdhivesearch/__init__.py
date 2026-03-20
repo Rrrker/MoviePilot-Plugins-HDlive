@@ -844,6 +844,7 @@ class HDHiveSearch(_PluginBase):
             # 拼接一行
             line = f"{ordinal} {pan_type} | {display_title} | {size} | {res_source} | {points_str}{official_str}"
             lines.append(line)
+            lines.append('')
 
         lines.append("━━━━━━━━━━━━━━")
         lines.append("💡 回复「1？」查看详情")
