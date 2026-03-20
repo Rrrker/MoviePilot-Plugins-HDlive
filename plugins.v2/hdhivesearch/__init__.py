@@ -645,6 +645,12 @@ class HDHiveSearch(_PluginBase):
         if not event_data:
             return
 
+        # 添加 source 检查，避免处理插件自己触发的消息（避免死循环）
+        source = event_data.get('source')
+        if source == 'plugin' or source == self.__class__.__name__:
+            logger.debug("忽略插件自身触发的消息")
+            return
+
         # 获取消息内容
         text = event_data.get('text', '').strip()
         if not text:
