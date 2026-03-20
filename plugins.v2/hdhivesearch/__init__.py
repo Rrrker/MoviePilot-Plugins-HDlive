@@ -728,7 +728,7 @@ class HDHiveSearch(_PluginBase):
             self._stats['last_search_time'] = datetime.now().isoformat()
 
             # 6. 发送搜索结果
-            message = self._format_search_results(keyword, sorted_resources)
+            message = self._format_search_results(sorted_resources)
             self._send_message(channel, userid, f"🔍 搜索结果 - {keyword}", message)
 
         except HDHiveException as e:
@@ -807,8 +807,8 @@ class HDHiveSearch(_PluginBase):
 
         return sorted_resources
 
-    def _format_search_results(self, keyword: str, resources: List[Dict]) -> str:
-        lines = [f"🔍 搜索结果 - {keyword}", "━━━━━━━━━━━━━━"]
+    def _format_search_results(self, resources: List[Dict]) -> str:
+        lines = ["━━━━━━━━━━━━━━"]
 
         for i, res in enumerate(resources[:10], 1):
             # 序号
