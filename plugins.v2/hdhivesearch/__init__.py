@@ -990,6 +990,15 @@ class HDHiveSearch(_PluginBase):
 
     def _handle_user_info(self, channel, userid):
         """处理用户信息查询（Premium功能）"""
+        # 去重检查：3秒内相同命令只处理一次
+        cache_key = f"cmd:{userid}:me"
+        current_time = time.time()
+        last_time = self._request_cache.get(cache_key, 0)
+        if current_time - last_time < 3:
+            logger.debug(f"忽略重复命令: /hdhive_me")
+            return
+        self._request_cache[cache_key] = current_time
+
         if not self._check_premium_access("用户信息查询"):
             self._send_message(channel, userid, "权限不足",
                 "此功能需要Premium会员，请在插件配置中启用Premium用户选项")
@@ -1029,6 +1038,15 @@ class HDHiveSearch(_PluginBase):
 
     def _handle_checkin(self, channel, userid):
         """处理每日签到（Premium功能）"""
+        # 去重检查：3秒内相同命令只处理一次
+        cache_key = f"cmd:{userid}:checkin"
+        current_time = time.time()
+        last_time = self._request_cache.get(cache_key, 0)
+        if current_time - last_time < 3:
+            logger.debug(f"忽略重复命令: /hdhive_checkin")
+            return
+        self._request_cache[cache_key] = current_time
+
         if not self._check_premium_access("每日签到"):
             self._send_message(channel, userid, "权限不足",
                 "此功能需要Premium会员，请在插件配置中启用Premium用户选项")
@@ -1054,6 +1072,15 @@ class HDHiveSearch(_PluginBase):
 
     def _handle_quota(self, channel, userid):
         """处理免费额度查询（Premium功能）"""
+        # 去重检查：3秒内相同命令只处理一次
+        cache_key = f"cmd:{userid}:quota"
+        current_time = time.time()
+        last_time = self._request_cache.get(cache_key, 0)
+        if current_time - last_time < 3:
+            logger.debug(f"忽略重复命令: /hdhive_quota")
+            return
+        self._request_cache[cache_key] = current_time
+
         if not self._check_premium_access("免费额度查询"):
             self._send_message(channel, userid, "权限不足",
                 "此功能需要Premium会员，请在插件配置中启用Premium用户选项")
@@ -1085,6 +1112,15 @@ class HDHiveSearch(_PluginBase):
 
     def _handle_stats_query(self, channel, userid):
         """处理统计查询"""
+        # 去重检查：3秒内相同命令只处理一次
+        cache_key = f"cmd:{userid}:stats"
+        current_time = time.time()
+        last_time = self._request_cache.get(cache_key, 0)
+        if current_time - last_time < 3:
+            logger.debug(f"忽略重复命令: /hdhive_stats")
+            return
+        self._request_cache[cache_key] = current_time
+
         # 计算成功率
         search_total = self._stats['total_searches']
         search_success_rate = round((self._stats['successful_searches'] / search_total * 100), 1) if search_total > 0 else 0
