@@ -808,34 +808,45 @@ class HDHiveSearch(_PluginBase):
         return sorted_resources
 
     def _format_search_results(self, keyword: str, resources: List[Dict]) -> str:
-        lines = [f"找到 {len(resources)} 个资源:\n"]
+        lines = [f"🔍 搜索结果 - {keyword}", "━━━━━━━━━━━━━━"]
 
         for i, res in enumerate(resources[:10], 1):
+            # 序号
+            ordinal = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"][i-1]
+
+            # 网盘
+            pan_type = res.get("pan_type", "未知")
+
+            # 标题 + remark
             title = res.get("title") or "未知标题"
+            remark = res.get("remark")
+            display_title = f"{title} {remark}" if remark else title
+
+            # 大小
             size = res.get("share_size") or "未知大小"
 
-            # 确保这些字段是列表，防止join报错
+            # 分辨率 + 来源
             video_res = res.get("video_resolution")
-            resolution = ", ".join(video_res) if isinstance(video_res, list) else str(video_res) if video_res else "未知"
+            resolution = ", ".join(video_res) if isinstance(video_res, list) else str(video_res) if video_res else ""
+            source = res.get("source")
+            source_str = ", ".join(source) if isinstance(source, list) else str(source) if source else ""
+            res_source = f"{resolution} {source_str}".strip() if resolution or source_str else "未知"
 
-            src = res.get("source")
-            source = ", ".join(src) if isinstance(src, list) else str(src) if src else "未知"
-
-            sub_lang = res.get("subtitle_language")
-            subtitle = ", ".join(sub_lang) if isinstance(sub_lang, list) else str(sub_lang) if sub_lang else "无"
-
+            # 积分状态
             points = res.get("unlock_points")
             is_free = points is None or points == 0
+            points_str = "🆓" if is_free else f"💰{points}积分"
+
+            # 官方标记
             is_official = res.get("is_official", False)
+            official_str = " 官方⭐" if is_official else ""
 
-            status = "🆓" if is_free else f"💰{points}积分"
-            official = "⭐官方" if is_official else ""
-
-            line = f"{i}. {title}\n   大小: {size} | 分辨率: {resolution}\n   来源: {source} | 字幕: {subtitle}\n   {status} {official}\n"
+            # 拼接一行
+            line = f"{ordinal} {pan_type} | {display_title} | {size} | {res_source} | {points_str}{official_str}"
             lines.append(line)
 
-        lines.append("\n💡 回复数字查看详情，如「1？」")
-        lines.append("💡 指定网盘类型，如「1.115？」")
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("💡 回复「1？」查看详情")
         return "\n".join(lines)
 
     def _handle_selection(self, channel, userid, index: int, pan_type: Optional[str] = None):
