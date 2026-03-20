@@ -33,6 +33,9 @@ class HDHiveAPI:
     def __init__(self, api_key: str, base_url: str = None, timeout: int = 30, use_proxy: bool = True, proxy_url: str = None):
         self.api_key = api_key
         self.base_url = base_url or self.BASE_URL
+        # 确保 base_url 以 / 结尾，保证 urljoin 正确拼接
+        if self.base_url and not self.base_url.endswith('/'):
+            self.base_url = self.base_url + '/'
         self.timeout = timeout
         self.use_proxy = use_proxy
         self.proxy_url = proxy_url
