@@ -18,7 +18,7 @@ from .hdhive_api import HDHiveAPI, HDHiveException
 class HDHiveSearch(_PluginBase):
     plugin_name = "影巢资源搜索"
     plugin_desc = "支持积分解锁、CMS自动转存、优先级配置、Premium控制。"
-    plugin_icon = "Hdhive_A.png"
+    plugin_icon = "https://raw.githubusercontent.com/Rrrker/MoviePilot-Plugins-HDlive/main/icons/Hdhive_A.png"
     plugin_version = "2.1.2"
     plugin_author = "Rrrker"
     author_url = "https://github.com/Rrrker/MoviePilot-Plugins"
