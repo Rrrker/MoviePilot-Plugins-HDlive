@@ -1383,8 +1383,9 @@ class HDHiveSearch(_PluginBase):
         if channel and userid:
             self._send_message(channel, userid, f"✅ {status}" if result.get("ok") else f"❌ {status}", text)
         else:
-            # 自动签到没有 channel 和 userid，记录到日志
-            logger.info(f"[HDHiveSearch] 自动签到结果: {status} - {message}")
+            # 定时签到触发站点消息广播
+            title = f"✅ {status}" if result.get("ok") else f"❌ {status}"
+            self.post_message(mtype=NotificationType.SiteMessage, title=title, text=text)
 
     def _handle_quota(self, channel, userid):
         """处理免费额度查询（Premium功能）"""
