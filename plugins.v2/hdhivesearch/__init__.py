@@ -1308,10 +1308,16 @@ class HDHiveSearch(_PluginBase):
         try:
             payload = resp.json() if resp is not None else {}
         except ValueError:
+            # 记录详细的响应信息用于调试
+            logger.error(f"[Cookie签到] 接口返回非JSON响应")
+            logger.error(f"[Cookie签到] HTTP状态码: {resp.status_code if resp is not None else 'None'}")
+            logger.error(f"[Cookie签到] Content-Type: {resp.headers.get('Content-Type', 'Unknown') if resp is not None else 'None'}")
+            logger.error(f"[Cookie签到] 响应内容: {resp.text[:500] if resp is not None else 'None'}...")  # 只记录前500字符
+
             return {
                 "ok": False,
                 "status": "签到失败",
-                "message": "签到接口返回非JSON",
+                "message": f"签到接口返回非JSON (状态码: {resp.status_code if resp is not None else 'None'})",
                 "mode": "cookie",
                 "trigger": trigger_type,
                 "points_gained": "—",
