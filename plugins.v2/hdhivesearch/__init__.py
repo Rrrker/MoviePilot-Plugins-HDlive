@@ -1241,8 +1241,24 @@ class HDHiveSearch(_PluginBase):
             "Referer": f"{self._site_base_url}/",
             "Authorization": f"Bearer {token}",
         }
+
+        # 准备代理配置
+        proxies = None
+        if self._use_proxy and self._proxy_url:
+            proxies = {
+                "http": self._proxy_url,
+                "https": self._proxy_url,
+            }
+
         try:
-            resp = requests.get(self._user_info_api, headers=headers, cookies=cookies, timeout=30, verify=False)
+            resp = requests.get(
+                self._user_info_api,
+                headers=headers,
+                cookies=cookies,
+                timeout=30,
+                verify=False,
+                proxies=proxies
+            )
         except requests.RequestException:
             return None
 
@@ -1292,8 +1308,23 @@ class HDHiveSearch(_PluginBase):
         if csrf:
             headers["x-csrf-token"] = csrf
 
+        # 准备代理配置
+        proxies = None
+        if self._use_proxy and self._proxy_url:
+            proxies = {
+                "http": self._proxy_url,
+                "https": self._proxy_url,
+            }
+
         try:
-            resp = requests.post(self._cookie_checkin_api, headers=headers, cookies=cookies, timeout=30, verify=False)
+            resp = requests.post(
+                self._cookie_checkin_api,
+                headers=headers,
+                cookies=cookies,
+                timeout=30,
+                verify=False,
+                proxies=proxies
+            )
         except requests.RequestException as e:
             return {
                 "ok": False,
