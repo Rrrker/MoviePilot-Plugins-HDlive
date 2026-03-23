@@ -727,8 +727,16 @@ class HDHiveSearch(_PluginBase):
                     f"影片「{keyword}」暂无可用资源。")
                 return
 
-            # 3. 按网盘优先级排序
-            sorted_resources = self._sort_resources_by_priority(resources)
+            # 3. 过滤无效和ISO资源
+            filtered_resources = self._filter_resources(resources)
+            if not filtered_resources:
+                self._stats['failed_searches'] += 1
+                self._send_message(channel, userid, "搜索结果",
+                    f"影片「{keyword}」无可用资源（已过滤无效资源）。")
+                return
+
+            # 4. 按网盘优先级排序
+            sorted_resources = self._sort_resources_by_priority(filtered_resources)
 
             # 4. 缓存搜索结果（5分钟有效期）
             cache_key = f"{userid}_{int(time.time() // 300)}"
