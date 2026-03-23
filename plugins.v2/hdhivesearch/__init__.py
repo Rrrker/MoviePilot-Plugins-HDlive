@@ -1163,8 +1163,17 @@ class HDHiveSearch(_PluginBase):
             logger.error(f"获取用户信息失败: {e}")
             self._send_message(channel, userid, "错误", str(e))
 
+    def _dispatch_checkin(self, trigger_type: str, channel=None, userid=None):
+        if self._is_premium_user:
+            result = self._checkin_via_api(trigger_type)
+        else:
+            result = self._checkin_via_cookie(trigger_type)
+
+        self._notify_checkin_result(result, channel=channel, userid=userid)
+        return result
+
     def _handle_checkin(self, channel, userid):
-        """处理每日签到（Premium功能）"""
+        """处理每日签到"""
         # 去重检查：3秒内相同命令只处理一次
         cache_key = f"cmd:{userid}:checkin"
         current_time = time.time()
@@ -1174,28 +1183,7 @@ class HDHiveSearch(_PluginBase):
             return
         self._request_cache[cache_key] = current_time
 
-        if not self._check_premium_access("每日签到"):
-            self._send_message(channel, userid, "权限不足",
-                "此功能需要Premium会员，请在插件配置中启用Premium用户选项")
-            return
-
-        if not self._api:
-            return
-
-        try:
-            result = self._api.checkin()
-            message = result.get("message", "签到成功")
-            points = result.get("points", 0)
-            total_days = result.get("total_days", 0)
-
-            self._send_message(
-                channel, userid, "✅ 签到成功",
-                f"{message}\n获得积分: {points}\n累计签到: {total_days}天"
-            )
-
-        except HDHiveException as e:
-            logger.error(f"签到失败: {e}")
-            self._send_message(channel, userid, "签到失败", str(e))
+        self._dispatch_checkin(trigger_type="manual", channel=channel, userid=userid)
 
     def _handle_quota(self, channel, userid):
         """处理免费额度查询（Premium功能）"""
