@@ -5,6 +5,9 @@ import requests
 from typing import Any, List, Dict, Optional, Tuple
 from datetime import datetime
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+
 from app.core.config import settings
 from app.core.event import eventmanager, Event
 from app.log import logger
@@ -165,6 +168,12 @@ class HDHiveSearch(_PluginBase):
                 logger.error(f"CloudSyncMedia初始化失败: {str(e)}")
                 self._cms_enabled = False
                 self._cms_client = None
+
+        # 初始化签到定时调度器
+        try:
+            self._setup_checkin_scheduler()
+        except Exception as e:
+            logger.error(f"签到定时任务初始化失败: {e}")
 
     def _verify_premium_user(self):
         """验证 Premium 用户状态（仅验证 API Key 有效性，不调用 Premium 专属接口）"""
@@ -1186,6 +1195,29 @@ class HDHiveSearch(_PluginBase):
 
         self._dispatch_checkin(trigger_type="manual", channel=channel, userid=userid)
 
+    def _run_scheduled_checkin(self):
+        """定时任务执行签到"""
+        self._dispatch_checkin(trigger_type="cron")
+
+    def _setup_checkin_scheduler(self):
+        """设置签到定时调度器"""
+        if not (self._enabled and self._checkin_enabled and self._checkin_cron):
+            return
+
+        try:
+            self._scheduler = BackgroundScheduler(timezone=settings.TZ)
+            self._scheduler.add_job(
+                func=self._run_scheduled_checkin,
+                trigger=CronTrigger.from_crontab(self._checkin_cron),
+                name="HDHive签到"
+            )
+            if self._scheduler.get_jobs():
+                self._scheduler.start()
+                logger.info(f"签到定时任务已启动，cron表达式: {self._checkin_cron}")
+        except Exception as e:
+            logger.error(f"签到定时任务初始化失败: {e}")
+            self._scheduler = None
+
     def _parse_cookie_string(self, cookie_str: str) -> Dict[str, str]:
         """解析 Cookie 字符串为字典"""
         cookies = {}
@@ -1734,7 +1766,16 @@ class HDHiveSearch(_PluginBase):
         })
 
     def stop_service(self):
-        pass
+        """停止服务并清理资源"""
+        try:
+            if self._scheduler:
+                self._scheduler.remove_all_jobs()
+                if self._scheduler.running:
+                    self._scheduler.shutdown()
+                self._scheduler = None
+                logger.info("签到定时调度器已停止")
+        except Exception as e:
+            logger.error(f"停止签到调度失败: {e}")
 
     def api_search(self, tmdb_id: str, media_type: str = "movie"):
         if not self._api:
