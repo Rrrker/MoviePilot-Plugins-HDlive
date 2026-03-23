@@ -1,6 +1,7 @@
 import re
 import json
 import time
+import requests
 from typing import Any, List, Dict, Optional, Tuple
 from datetime import datetime
 
@@ -1184,6 +1185,174 @@ class HDHiveSearch(_PluginBase):
         self._request_cache[cache_key] = current_time
 
         self._dispatch_checkin(trigger_type="manual", channel=channel, userid=userid)
+
+    def _parse_cookie_string(self, cookie_str: str) -> Dict[str, str]:
+        """解析 Cookie 字符串为字典"""
+        cookies = {}
+        for item in (cookie_str or "").split(";"):
+            if "=" in item:
+                k, v = item.strip().split("=", 1)
+                cookies[k] = v
+        return cookies
+
+    def _extract_points_from_message(self, message: str):
+        """从签到消息中提取获得的积分数"""
+        match = re.search(r"获得 (\d+) 积分", message or "")
+        return int(match.group(1)) if match else "—"
+
+    def _fetch_current_points_with_cookie(self, cookies: Dict[str, str], token: str):
+        """使用 Cookie 和 Token 获取当前可用积分"""
+        headers = {
+            "User-Agent": settings.USER_AGENT,
+            "Accept": "application/json, text/plain, */*",
+            "Origin": self._site_base_url,
+            "Referer": f"{self._site_base_url}/",
+            "Authorization": f"Bearer {token}",
+        }
+        try:
+            resp = requests.get(self._user_info_api, headers=headers, cookies=cookies, timeout=30, verify=False)
+        except requests.RequestException:
+            return None
+
+        try:
+            data = resp.json() if resp is not None else {}
+        except ValueError:
+            return None
+
+        detail = (data.get("response") or {}).get("data") or data.get("detail") or data.get("data") or {}
+        return ((detail.get("user_meta") or {}).get("points")) if isinstance(detail, dict) else None
+
+    def _checkin_via_cookie(self, trigger_type: str) -> Dict[str, Any]:
+        """通过 Cookie 进行签到（非 Premium 用户）"""
+        cookie_str = (self._checkin_cookie or "").strip()
+        if not cookie_str:
+            return {
+                "ok": False,
+                "status": "签到失败",
+                "message": "未配置签到Cookie",
+                "mode": "cookie",
+                "trigger": trigger_type,
+                "points_gained": "—",
+                "current_points": "—"
+            }
+
+        cookies = self._parse_cookie_string(cookie_str)
+        token = cookies.get("token")
+        if not token:
+            return {
+                "ok": False,
+                "status": "签到失败",
+                "message": "Cookie中缺少token",
+                "mode": "cookie",
+                "trigger": trigger_type,
+                "points_gained": "—",
+                "current_points": "—"
+            }
+
+        csrf = cookies.get("csrf_access_token")
+        headers = {
+            "User-Agent": settings.USER_AGENT,
+            "Accept": "application/json, text/plain, */*",
+            "Origin": self._site_base_url,
+            "Referer": f"{self._site_base_url}/",
+            "Authorization": f"Bearer {token}",
+        }
+        if csrf:
+            headers["x-csrf-token"] = csrf
+
+        try:
+            resp = requests.post(self._cookie_checkin_api, headers=headers, cookies=cookies, timeout=30, verify=False)
+        except requests.RequestException as e:
+            return {
+                "ok": False,
+                "status": "签到失败",
+                "message": f"网络或站点异常: {e}",
+                "mode": "cookie",
+                "trigger": trigger_type,
+                "points_gained": "—",
+                "current_points": "—"
+            }
+
+        try:
+            payload = resp.json() if resp is not None else {}
+        except ValueError:
+            return {
+                "ok": False,
+                "status": "签到失败",
+                "message": "签到接口返回非JSON",
+                "mode": "cookie",
+                "trigger": trigger_type,
+                "points_gained": "—",
+                "current_points": "—"
+            }
+
+        message = payload.get("message", "无返回消息")
+        success = bool(payload.get("success")) or ("已经签到" in message or "签到过" in message)
+        status = "已签到" if ("已经签到" in message or "签到过" in message) else ("签到成功" if success else "签到失败")
+
+        points_gained = self._extract_points_from_message(message)
+        current_points = self._fetch_current_points_with_cookie(cookies, token)
+        current_points = current_points if current_points is not None else "—"
+
+        return {
+            "ok": success,
+            "status": status,
+            "message": message,
+            "mode": "cookie",
+            "trigger": trigger_type,
+            "points_gained": points_gained,
+            "current_points": current_points,
+        }
+
+    def _checkin_via_api(self, trigger_type: str) -> Dict[str, Any]:
+        """通过 API 进行签到（Premium 用户）"""
+        # TODO: 这个方法在 Task 2 中应该实现，但如果没有实现，我们提供一个占位符
+        return {
+            "ok": False,
+            "status": "签到失败",
+            "message": "API 签到功能尚未实现（Premium 用户）",
+            "mode": "api",
+            "trigger": trigger_type,
+            "points_gained": "—",
+            "current_points": "—"
+        }
+
+    def _notify_checkin_result(self, result: Dict[str, Any], channel=None, userid=None):
+        """发送签到结果通知"""
+        status = result.get("status", "未知")
+        message = result.get("message", "")
+        points_gained = result.get("points_gained", "—")
+        current_points = result.get("current_points", "—")
+        mode = result.get("mode", "")
+        trigger = result.get("trigger", "")
+
+        trigger_text = "手动" if trigger == "manual" else "自动"
+        mode_text = "Cookie" if mode == "cookie" else "API"
+
+        # 构建通知消息
+        lines = [
+            f"━━━━━━━━━━━━━━",
+            f"📅 影巢签到 ({trigger_text}/{mode_text})",
+            f"━━━━━━━━━━━━━━",
+            f"🎯 状态: {status}",
+            f"💬 消息: {message}",
+        ]
+
+        if points_gained != "—":
+            lines.append(f"🎁 本次获得积分: {points_gained}")
+
+        if current_points != "—":
+            lines.append(f"💰 当前可用积分: {current_points}")
+
+        lines.append("━━━━━━━━━━━━━━")
+
+        text = "\n".join(lines)
+
+        if channel and userid:
+            self._send_message(channel, userid, f"✅ {status}" if result.get("ok") else f"❌ {status}", text)
+        else:
+            # 自动签到没有 channel 和 userid，记录到日志
+            logger.info(f"[HDHiveSearch] 自动签到结果: {status} - {message}")
 
     def _handle_quota(self, channel, userid):
         """处理免费额度查询（Premium功能）"""
