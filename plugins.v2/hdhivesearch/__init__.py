@@ -29,6 +29,13 @@ class HDHiveSearch(_PluginBase):
     _enabled = False
     _api_key = ""
     _api_base_url = "https://hdhive.com/api/open"
+    _site_base_url = "https://hdhive.com"
+    _cookie_checkin_api = "https://hdhive.com/api/customer/user/checkin"
+    _user_info_api = "https://hdhive.com/api/customer/user/info"
+    _checkin_cookie = ""
+    _checkin_enabled = False
+    _checkin_cron = "0 8 * * *"
+    _scheduler = None
     _use_proxy = True
     _proxy_url = ""
     _notify = True
@@ -91,11 +98,18 @@ class HDHiveSearch(_PluginBase):
             self._enabled = config.get("enabled", False)
             self._api_key = config.get("api_key", "")
             self._api_base_url = config.get("api_base_url", "https://hdhive.com/api/open")
+            self._checkin_cookie = config.get("checkin_cookie", "")
+            self._checkin_enabled = config.get("checkin_enabled", False)
+            self._checkin_cron = config.get("checkin_cron", "0 8 * * *")
             self._use_proxy = config.get("use_proxy", True)
             self._proxy_url = config.get("proxy_url", "")
             self._notify = config.get("notify", True)
             self._search_history = config.get("search_history", {})
             self._user_cache = config.get("user_cache", {})
+
+            self._site_base_url = "https://hdhive.com"
+            self._cookie_checkin_api = "https://hdhive.com/api/customer/user/checkin"
+            self._user_info_api = "https://hdhive.com/api/customer/user/info"
 
             # Premium 用户配置
             self._is_premium_user = config.get("is_premium_user", False)
@@ -193,6 +207,13 @@ class HDHiveSearch(_PluginBase):
                 "cmd": "/hdhive_checkin",
                 "event": EventType.PluginAction,
                 "desc": "HDHive每日签到",
+                "category": "资源搜索",
+                "data": {"action": "hdhive_checkin"}
+            },
+            {
+                "cmd": "/ycqd",
+                "event": EventType.PluginAction,
+                "desc": "影巢快捷签到",
                 "category": "资源搜索",
                 "data": {"action": "hdhive_checkin"}
             },
@@ -330,10 +351,46 @@ class HDHiveSearch(_PluginBase):
                                     {
                                         "component": "VTextField",
                                         "props": {
-                                            "model": "api_base_url",
-                                            "label": "API地址",
-                                            "placeholder": "https://hdhive.com/api/open",
-                                            "hint": "HDHive API服务地址",
+                                            "model": "checkin_cookie",
+                                            "label": "签到Cookie",
+                                            "type": "password",
+                                            "placeholder": "至少包含 token，建议包含 csrf_access_token",
+                                            "hint": "至少包含 token，建议包含 csrf_access_token",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "checkin_enabled",
+                                            "label": "启用自动签到",
+                                            "hint": "开启后按计划自动执行签到",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VCronField",
+                                        "props": {
+                                            "model": "checkin_cron",
+                                            "label": "签到计划",
+                                            "hint": "Cron表达式",
                                             "persistent-hint": True
                                         }
                                     }
@@ -603,7 +660,9 @@ class HDHiveSearch(_PluginBase):
             "enabled": self._enabled,
             "is_premium_user": self._is_premium_user,
             "api_key": self._api_key,
-            "api_base_url": self._api_base_url,
+            "checkin_cookie": self._checkin_cookie,
+            "checkin_enabled": self._checkin_enabled,
+            "checkin_cron": self._checkin_cron,
             "use_proxy": self._use_proxy,
             "proxy_url": self._proxy_url,
             "priority_1": self._priority_1,
@@ -1450,6 +1509,9 @@ class HDHiveSearch(_PluginBase):
             "enabled": self._enabled,
             "api_key": self._api_key,
             "api_base_url": self._api_base_url,
+            "checkin_cookie": self._checkin_cookie,
+            "checkin_enabled": self._checkin_enabled,
+            "checkin_cron": self._checkin_cron,
             "use_proxy": self._use_proxy,
             "proxy_url": self._proxy_url,
             "notify": self._notify,
