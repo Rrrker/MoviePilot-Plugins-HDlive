@@ -58,6 +58,9 @@ class HDHiveSearch(_PluginBase):
     _cms_password = ""
     _cms_client = None
 
+    # ISO 格式过滤配置
+    _filter_iso = False
+
     # 统计数据
     _stats = {
         'total_searches': 0,
@@ -108,6 +111,9 @@ class HDHiveSearch(_PluginBase):
             self._cms_url = config.get("cms_url", "")
             self._cms_username = config.get("cms_username", "")
             self._cms_password = config.get("cms_password", "")
+
+            # ISO 格式过滤配置
+            self._filter_iso = config.get("filter_iso", False)
 
             # 加载统计数据
             self._stats = config.get("stats", self._stats)
