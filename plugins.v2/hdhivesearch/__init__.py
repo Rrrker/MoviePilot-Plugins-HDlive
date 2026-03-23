@@ -1468,6 +1468,7 @@ class HDHiveSearch(_PluginBase):
             "cms_url": self._cms_url,
             "cms_username": self._cms_username,
             "cms_password": self._cms_password,
+            "filter_iso": self._filter_iso,
 
             # 统计数据
             "stats": self._stats,
