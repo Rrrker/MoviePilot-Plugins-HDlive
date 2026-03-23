@@ -2,6 +2,7 @@ import re
 import json
 import time
 import requests
+import jwt
 from typing import Any, List, Dict, Optional, Tuple
 from datetime import datetime
 
@@ -1293,11 +1294,23 @@ class HDHiveSearch(_PluginBase):
             }
 
         csrf = cookies.get("csrf_access_token")
+
+        # 从JWT token解析user_id，构建动态Referer（与参考插件保持一致）
+        user_id = None
+        referer = self._site_base_url
+        try:
+            decoded_token = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
+            user_id = decoded_token.get('sub')
+            if user_id:
+                referer = f"{self._site_base_url}/user/{user_id}"
+        except Exception as e:
+            logger.warning(f"[Cookie签到] 从Token解析用户ID失败，使用默认Referer: {e}")
+
         headers = {
             "User-Agent": settings.USER_AGENT,
             "Accept": "application/json, text/plain, */*",
             "Origin": self._site_base_url,
-            "Referer": f"{self._site_base_url}/",
+            "Referer": referer,
             "Authorization": f"Bearer {token}",
         }
         if csrf:
