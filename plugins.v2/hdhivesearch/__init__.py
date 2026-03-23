@@ -796,6 +796,27 @@ class HDHiveSearch(_PluginBase):
             logger.error(f"TMDB搜索异常: {e}")
             return None, None
 
+    def _filter_resources(self, resources: List[Dict]) -> List[Dict]:
+        """过滤无效和ISO格式资源"""
+        filtered = []
+        for res in resources:
+            # 1. 排除无效资源
+            validate_status = res.get("validate_status")
+            if validate_status in ("error", "invalid"):
+                logger.debug(f"过滤无效资源: {res.get('title', '未知标题')} (status={validate_status})")
+                continue
+
+            # 2. 如果开启ISO过滤，排除ISO格式
+            if self._filter_iso:
+                source = res.get("source", [])
+                source_str = ",".join(source) if isinstance(source, list) else str(source)
+                if "ISO" in source_str or "蓝光原盘/ISO" in source_str:
+                    logger.debug(f"过滤ISO资源: {res.get('title', '未知标题')} (source={source_str})")
+                    continue
+
+            filtered.append(res)
+        return filtered
+
     def _sort_resources_by_priority(self, resources: List[Dict]) -> List[Dict]:
         """按网盘优先级排序和过滤资源"""
         priority_map = {
