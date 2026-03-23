@@ -1295,7 +1295,7 @@ class HDHiveSearch(_PluginBase):
 
 📊 转存统计: 成功 {self._stats['successful_transfers']}/{self._stats['cms_transfers']}
 """
-                self._send_message(channel, userid, "📦 转存成功", message.strip())
+                self._send_message(channel, userid, "📦 转存结果", f"━━━━━━━━━━━━━━\n{message.strip()}")
             else:
                 self._stats['failed_transfers'] += 1
                 self._handle_cms_error(Exception(cms_result.get('message', '转存失败')), channel, userid)
