@@ -1317,8 +1317,20 @@ class HDHiveSearch(_PluginBase):
             headers["x-csrf-token"] = csrf
 
         # 使用系统配置的代理（与HDHiveAPI保持一致）
-        # 如果系统配置了代理，Cookie签到也应该使用
         proxies = settings.PROXY
+
+        # 详细调试日志
+        logger.info(f"[Cookie签到] ===== 开始Cookie签到流程 =====")
+        logger.info(f"[Cookie签到] Cookie中的键: {list(cookies.keys())}")
+        logger.info(f"[Cookie签到] Token前10字符: {token[:10]}...")
+        logger.info(f"[Cookie签到] CSRF Token: {'有' if csrf else '无'}")
+        logger.info(f"[Cookie签到] 解析出的user_id: {user_id}")
+        logger.info(f"[Cookie签到] 使用的Referer: {referer}")
+        logger.info(f"[Cookie签到] 请求URL: {self._cookie_checkin_api}")
+        logger.info(f"[Cookie签到] 请求Headers: {json.dumps({k: v for k, v in headers.items() if k != 'Authorization'}, ensure_ascii=False)}")
+        logger.info(f"[Cookie签到] 使用代理: {'是' if proxies else '否'}")
+        if proxies:
+            logger.info(f"[Cookie签到] 代理配置: {proxies}")
 
         try:
             resp = requests.post(
@@ -1329,7 +1341,10 @@ class HDHiveSearch(_PluginBase):
                 timeout=30,
                 verify=False
             )
+            logger.info(f"[Cookie签到] 响应状态码: {resp.status_code}")
+            logger.info(f"[Cookie签到] 响应Headers: {dict(resp.headers)}")
         except requests.RequestException as e:
+            logger.error(f"[Cookie签到] 请求异常: {type(e).__name__}: {e}")
             return {
                 "ok": False,
                 "status": "签到失败",
@@ -1342,12 +1357,16 @@ class HDHiveSearch(_PluginBase):
 
         try:
             payload = resp.json() if resp is not None else {}
+            logger.info(f"[Cookie签到] 响应JSON解析成功")
+            logger.info(f"[Cookie签到] 响应内容: {json.dumps(payload, ensure_ascii=False)}")
         except ValueError:
             # 记录详细的响应信息用于调试
-            logger.error(f"[Cookie签到] 接口返回非JSON响应")
+            logger.error(f"[Cookie签到] ===== 响应解析失败 =====")
             logger.error(f"[Cookie签到] HTTP状态码: {resp.status_code if resp is not None else 'None'}")
             logger.error(f"[Cookie签到] Content-Type: {resp.headers.get('Content-Type', 'Unknown') if resp is not None else 'None'}")
-            logger.error(f"[Cookie签到] 响应内容: {resp.text[:500] if resp is not None else 'None'}...")  # 只记录前500字符
+            logger.error(f"[Cookie签到] 响应长度: {len(resp.text) if resp is not None else 0} 字符")
+            logger.error(f"[Cookie签到] 响应前500字符: {resp.text[:500] if resp is not None else 'None'}")
+            logger.error(f"[Cookie签到] ===== Cookie签到流程结束（失败） =====")
 
             return {
                 "ok": False,
@@ -1366,6 +1385,12 @@ class HDHiveSearch(_PluginBase):
         points_gained = self._extract_points_from_message(message)
         current_points = self._fetch_current_points_with_cookie(cookies, token)
         current_points = current_points if current_points is not None else "—"
+
+        logger.info(f"[Cookie签到] 签到结果: {status}")
+        logger.info(f"[Cookie签到] 返回消息: {message}")
+        logger.info(f"[Cookie签到] 本次获得积分: {points_gained}")
+        logger.info(f"[Cookie签到] 当前可用积分: {current_points}")
+        logger.info(f"[Cookie签到] ===== Cookie签到流程结束 =====")
 
         return {
             "ok": success,
