@@ -557,6 +557,27 @@ class HDHiveSearch(_PluginBase):
                             }
                         ]
                     },
+                    # ISO 格式过滤配置
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "filter_iso",
+                                            "label": "过滤ISO格式资源",
+                                            "hint": "开启后排除ISO和蓝光原盘/ISO格式，避免CMS播放卡顿",
+                                            "persistent-hint": True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
                     # 使用说明
                     {
                         "component": "VRow",
@@ -592,7 +613,8 @@ class HDHiveSearch(_PluginBase):
             "cms_enabled": self._cms_enabled,
             "cms_url": self._cms_url,
             "cms_username": self._cms_username,
-            "cms_password": self._cms_password
+            "cms_password": self._cms_password,
+            "filter_iso": self._filter_iso
         }
 
     def get_page(self) -> List[dict]:
