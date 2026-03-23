@@ -1242,22 +1242,17 @@ class HDHiveSearch(_PluginBase):
             "Authorization": f"Bearer {token}",
         }
 
-        # 准备代理配置
-        proxies = None
-        if self._use_proxy and self._proxy_url:
-            proxies = {
-                "http": self._proxy_url,
-                "https": self._proxy_url,
-            }
+        # 使用系统配置的代理（与签到接口保持一致）
+        proxies = settings.PROXY
 
         try:
             resp = requests.get(
                 self._user_info_api,
                 headers=headers,
                 cookies=cookies,
+                proxies=proxies,
                 timeout=30,
-                verify=False,
-                proxies=proxies
+                verify=False
             )
         except requests.RequestException:
             return None
@@ -1308,22 +1303,18 @@ class HDHiveSearch(_PluginBase):
         if csrf:
             headers["x-csrf-token"] = csrf
 
-        # 准备代理配置
-        proxies = None
-        if self._use_proxy and self._proxy_url:
-            proxies = {
-                "http": self._proxy_url,
-                "https": self._proxy_url,
-            }
+        # 使用系统配置的代理（与HDHiveAPI保持一致）
+        # 如果系统配置了代理，Cookie签到也应该使用
+        proxies = settings.PROXY
 
         try:
             resp = requests.post(
                 self._cookie_checkin_api,
                 headers=headers,
                 cookies=cookies,
+                proxies=proxies,
                 timeout=30,
-                verify=False,
-                proxies=proxies
+                verify=False
             )
         except requests.RequestException as e:
             return {
