@@ -1306,16 +1306,48 @@ class HDHiveSearch(_PluginBase):
 
     def _checkin_via_api(self, trigger_type: str) -> Dict[str, Any]:
         """通过 API 进行签到（Premium 用户）"""
-        # TODO: 这个方法在 Task 2 中应该实现，但如果没有实现，我们提供一个占位符
-        return {
-            "ok": False,
-            "status": "签到失败",
-            "message": "API 签到功能尚未实现（Premium 用户）",
-            "mode": "api",
-            "trigger": trigger_type,
-            "points_gained": "—",
-            "current_points": "—"
-        }
+        if not self._api:
+            return {
+                "ok": False,
+                "status": "签到失败",
+                "message": "插件未启用或API未配置",
+                "mode": "api",
+                "trigger": trigger_type,
+                "points_gained": "—",
+                "current_points": "—"
+            }
+
+        try:
+            result = self._api.checkin()
+            message = result.get("message", "签到成功")
+            points_gained = result.get("points", "—")
+
+            current_points = "—"
+            try:
+                info = self._api.get_user_info() or {}
+                current_points = (info.get("user_meta") or {}).get("points", "—")
+            except Exception:
+                pass
+
+            return {
+                "ok": True,
+                "status": "签到成功" if "已" not in message else "已签到",
+                "message": message,
+                "mode": "api",
+                "trigger": trigger_type,
+                "points_gained": points_gained,
+                "current_points": current_points,
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "status": "签到失败",
+                "message": str(e),
+                "mode": "api",
+                "trigger": trigger_type,
+                "points_gained": "—",
+                "current_points": "—"
+            }
 
     def _notify_checkin_result(self, result: Dict[str, Any], channel=None, userid=None):
         """发送签到结果通知"""
