@@ -1,2 +1,4 @@
 requests>=2.25.0
 urllib3>=1.26.0
+apscheduler>=3.10.0
+pyjwt>=2.0.0
