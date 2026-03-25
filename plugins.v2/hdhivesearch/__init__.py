@@ -24,7 +24,7 @@ class HDHiveSearch(_PluginBase):
     plugin_name = "影巢资源搜索"
     plugin_desc = "支持积分解锁、CMS自动转存、优先级配置、Premium控制。"
     plugin_icon = "https://raw.githubusercontent.com/Rrrker/MoviePilot-Plugins-HDlive/main/icons/Hdhive_A.png"
-    plugin_version = "2.1.4"
+    plugin_version = "2.1.5"
     plugin_author = "Rrrker"
     author_url = "https://github.com/Rrrker/MoviePilot-Plugins"
     plugin_config_prefix = "hdhivesearch_"
@@ -757,6 +757,15 @@ class HDHiveSearch(_PluginBase):
         channel = event_data.get('channel')
         userid = event_data.get('userid') or event_data.get('user')
 
+        # 事件级去重：3秒内相同userid+文本只处理一次，避免重复日志/处理
+        cache_key = f"event:{userid or 'unknown'}:{text}"
+        current_time = time.time()
+        last_time = self._request_cache.get(cache_key, 0)
+        if current_time - last_time < 3:
+            logger.debug(f"忽略重复事件: {text}")
+            return
+        self._request_cache[cache_key] = current_time
+
         # 添加调试日志
         logger.info(f'[HDHiveSearch] 收到消息 - channel={channel}, userid={userid}, text={text}')
 
@@ -950,38 +959,28 @@ class HDHiveSearch(_PluginBase):
     def _format_search_results(self, resources: List[Dict]) -> str:
         lines = ["━━━━━━━━━━━━━━"]
 
-        for i, res in enumerate(resources[:10], 1):
-            # 序号
+        total = min(len(resources), 10)
+        for i, res in enumerate(resources[:total], 1):
             ordinal = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"][i-1]
-
-            # 网盘
             pan_type = res.get("pan_type", "未知")
-
-            # 标题（只保留名称，年份等）
             title = (res.get("title") or "未知标题").replace("\n", " ").replace("\r", "")
-
-            # remark（清理换行符）
             remark = res.get("remark")
             if remark:
                 remark = remark.replace("\n", " ").replace("\r", "")
-
-            # 大小
             size = res.get("share_size") or "未知大小"
-
-            # 积分状态
             points = res.get("unlock_points")
             is_free = points is None or points == 0
             points_str = "🆓" if is_free else f"💰{points}积分"
-
-            # 官方标记
             is_official = res.get("is_official", False)
             official_str = " 官方⭐" if is_official else ""
-
-            # 拼接一行：序号 网盘 | 标题 | remark | 大小 | 积分状态
             remark_part = f" | {remark}" if remark else ""
+
             line = f"{ordinal} {pan_type} | {title}{remark_part} | {size} | {points_str}{official_str}"
             lines.append(line)
-            lines.append('')
+
+            # 分隔线分组，最后一条后不再重复添加
+            if i != total:
+                lines.append("━━━━━━━━━━━━━━")
 
         lines.append("━━━━━━━━━━━━━━")
         lines.append("💡 回复「1？」查看详情")
@@ -1206,15 +1205,26 @@ class HDHiveSearch(_PluginBase):
             return
 
         try:
+            # 确保旧的调度器已完全停止，防止重复任务
+            if self._scheduler is not None:
+                logger.info("检测到旧调度器实例，先停止...")
+                self.stop_service()
+
+            # 创建新的调度器
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
             self._scheduler.add_job(
                 func=self._run_scheduled_checkin,
                 trigger=CronTrigger.from_crontab(self._checkin_cron),
-                name="HDHive签到"
+                name="HDHive签到",
+                id="hdhive_checkin_job",  # 添加固定ID，便于管理
+                replace_existing=True  # 如果存在同名任务则替换
             )
             if self._scheduler.get_jobs():
                 self._scheduler.start()
                 logger.info(f"签到定时任务已启动，cron表达式: {self._checkin_cron}")
+            else:
+                logger.warning("签到定时任务启动失败：没有添加任何任务")
+                self._scheduler = None
         except Exception as e:
             logger.error(f"签到定时任务初始化失败: {e}")
             self._scheduler = None
@@ -1235,11 +1245,21 @@ class HDHiveSearch(_PluginBase):
 
     def _fetch_current_points_with_cookie(self, cookies: Dict[str, str], token: str):
         """使用 Cookie 和 Token 获取当前可用积分"""
+        # 尝试解析 user_id 以构造更贴近真实用户页的 Referer，提升通过率
+        referer = f"{self._site_base_url}/"
+        try:
+            decoded_token = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
+            user_id = decoded_token.get("sub")
+            if user_id:
+                referer = f"{self._site_base_url}/user/{user_id}"
+        except Exception:
+            pass
+
         headers = {
             "User-Agent": settings.USER_AGENT,
             "Accept": "application/json, text/plain, */*",
             "Origin": self._site_base_url,
-            "Referer": f"{self._site_base_url}/",
+            "Referer": referer,
             "Authorization": f"Bearer {token}",
         }
 
@@ -1263,8 +1283,46 @@ class HDHiveSearch(_PluginBase):
         except ValueError:
             return None
 
-        detail = (data.get("response") or {}).get("data") or data.get("detail") or data.get("data") or {}
-        return ((detail.get("user_meta") or {}).get("points")) if isinstance(detail, dict) else None
+        # 尝试多种结构提取积分
+        candidates = []
+        if isinstance(data, dict):
+            root = data
+            candidates.append(root.get("points"))
+            if "data" in root and isinstance(root["data"], dict):
+                d = root["data"]
+                candidates.extend([
+                    (d.get("user_meta") or {}).get("points") if isinstance(d, dict) else None,
+                    (d.get("user") or {}).get("points") if isinstance(d, dict) else None,
+                    d.get("points") if isinstance(d, dict) else None,
+                ])
+            if "detail" in root and isinstance(root["detail"], dict):
+                d = root["detail"]
+                candidates.extend([
+                    (d.get("user_meta") or {}).get("points") if isinstance(d, dict) else None,
+                    d.get("points") if isinstance(d, dict) else None,
+                ])
+            if "response" in root and isinstance(root["response"], dict):
+                d = root["response"].get("data") if isinstance(root["response"], dict) else None
+                if isinstance(d, dict):
+                    candidates.extend([
+                        (d.get("user_meta") or {}).get("points") if isinstance(d, dict) else None,
+                        d.get("points") if isinstance(d, dict) else None,
+                    ])
+
+        for val in candidates:
+            if val is None:
+                continue
+            try:
+                return int(val)
+            except Exception:
+                try:
+                    return int(str(val))
+                except Exception:
+                    continue
+
+        # 解析不到则返回 None（上层会显示 "—"），并附带调试日志
+        logger.info(f"[Cookie签到] 获取积分失败，用户信息响应片段: {json.dumps(data, ensure_ascii=False)[:500] if isinstance(data, dict) else data}")
+        return None
 
     def _checkin_via_cookie(self, trigger_type: str) -> Dict[str, Any]:
         """通过 Cookie 进行签到（非 Premium 用户）"""
@@ -1379,27 +1437,36 @@ class HDHiveSearch(_PluginBase):
             }
 
         message = payload.get("message", "无返回消息")
-        success = bool(payload.get("success")) or ("已经签到" in message or "签到过" in message)
-        status = "已签到" if ("已经签到" in message or "签到过" in message) else ("签到成功" if success else "签到失败")
+        description = payload.get("description", "")
+
+        # 成功与否仅按 success 字段判定
+        success = bool(payload.get("success"))
+        status = "签到成功" if success else "签到失败"
+
+        # 展示用消息优先使用 description，再回退到 message
+        display_message = description if description else message
 
         points_gained = self._extract_points_from_message(message)
-        current_points = self._fetch_current_points_with_cookie(cookies, token)
-        current_points = current_points if current_points is not None else "—"
+
+        # 注释：当前签到接口不返回可用积分，为减少不必要的API请求，暂时注释掉额外查询
+        # current_points = self._fetch_current_points_with_cookie(cookies, token)
+        # current_points = current_points if current_points is not None else "—"
 
         logger.info(f"[Cookie签到] 签到结果: {status}")
         logger.info(f"[Cookie签到] 返回消息: {message}")
+        logger.info(f"[Cookie签到] 返回描述: {description}")
         logger.info(f"[Cookie签到] 本次获得积分: {points_gained}")
-        logger.info(f"[Cookie签到] 当前可用积分: {current_points}")
+        # logger.info(f"[Cookie签到] 当前可用积分: {current_points}")
         logger.info(f"[Cookie签到] ===== Cookie签到流程结束 =====")
 
         return {
             "ok": success,
             "status": status,
-            "message": message,
+            "message": display_message,
             "mode": "cookie",
             "trigger": trigger_type,
             "points_gained": points_gained,
-            "current_points": current_points,
+            # "current_points": current_points,  # 注释：接口暂不返回此字段
         }
 
     def _checkin_via_api(self, trigger_type: str) -> Dict[str, Any]:
@@ -1449,40 +1516,31 @@ class HDHiveSearch(_PluginBase):
 
     def _notify_checkin_result(self, result: Dict[str, Any], channel=None, userid=None):
         """发送签到结果通知"""
-        status = result.get("status", "未知")
         message = result.get("message", "")
-        points_gained = result.get("points_gained", "—")
-        current_points = result.get("current_points", "—")
         mode = result.get("mode", "")
         trigger = result.get("trigger", "")
 
         trigger_text = "手动" if trigger == "manual" else "自动"
         mode_text = "Cookie" if mode == "cookie" else "API"
 
-        # 构建通知消息
+        # 构建通知消息（简化版，只保留核心信息）
         lines = [
             f"━━━━━━━━━━━━━━",
             f"📅 影巢签到 ({trigger_text}/{mode_text})",
             f"━━━━━━━━━━━━━━",
-            f"🎯 状态: {status}",
             f"💬 消息: {message}",
         ]
 
-        if points_gained != "—":
-            lines.append(f"🎁 本次获得积分: {points_gained}")
-
-        if current_points != "—":
-            lines.append(f"💰 当前可用积分: {current_points}")
-
-        lines.append("━━━━━━━━━━━━━━")
-
         text = "\n".join(lines)
 
+        title = f"✅ 签到成功" if result.get("ok") else f"❌ 签到失败"
+
         if channel and userid:
-            self._send_message(channel, userid, f"✅ {status}" if result.get("ok") else f"❌ {status}", text)
+            self._send_message(channel, userid, title, text)
         else:
-            # 定时签到触发站点消息广播
-            title = f"✅ {status}" if result.get("ok") else f"❌ {status}"
+            # 无 channel/userid（如定时任务）：使用 MoviePilot 默认通知渠道广播
+            self.post_message(channel=None, title=title, text=text, userid=None)
+            # 同时保留站点消息
             self.post_message(mtype=NotificationType.SiteMessage, title=title, text=text)
 
     def _handle_quota(self, channel, userid):
@@ -1835,13 +1893,23 @@ class HDHiveSearch(_PluginBase):
         """停止服务并清理资源"""
         try:
             if self._scheduler:
+                # 先移除所有任务
                 self._scheduler.remove_all_jobs()
+                logger.debug("已移除所有定时任务")
+
+                # 等待正在运行的任务完成
                 if self._scheduler.running:
-                    self._scheduler.shutdown()
+                    # 使用 shutdown(wait=True) 等待任务完成
+                    self._scheduler.shutdown(wait=True)
+                    logger.debug("调度器已优雅关闭")
+
+                # 清空引用
                 self._scheduler = None
                 logger.info("签到定时调度器已停止")
         except Exception as e:
             logger.error(f"停止签到调度失败: {e}")
+            # 即使出错也要清空引用，防止残留
+            self._scheduler = None
 
     def api_search(self, tmdb_id: str, media_type: str = "movie"):
         if not self._api:
